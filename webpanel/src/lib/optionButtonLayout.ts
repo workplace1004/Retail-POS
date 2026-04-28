@@ -54,6 +54,7 @@ export const OPTION_BUTTON_ITEMS = [
   { id: "historiek", labelKey: "control.optionButton.history", fallbackLabel: "History" },
   { id: "subtotaal", labelKey: "control.optionButton.subtotal", fallbackLabel: "Subtotal" },
   { id: "terugname", labelKey: "control.optionButton.return", fallbackLabel: "Return name" },
+  { id: "check-in-out", labelKey: "control.optionButton.checkInOut", fallbackLabel: "Check in/out" },
   { id: "meer", labelKey: "control.optionButton.more", fallbackLabel: "More..." },
   { id: "eat-in-take-out", labelKey: "control.optionButton.eatInTakeOut", fallbackLabel: "Take Out" },
   { id: "externe-apps", labelKey: "control.optionButton.externalApps", fallbackLabel: "External Apps" },
@@ -98,7 +99,7 @@ export const DEFAULT_OPTION_BUTTON_LAYOUT: string[] = [
   "historiek",
   "subtotaal",
   "terugname",
-  "",
+  "check-in-out",
   "meer",
 ];
 

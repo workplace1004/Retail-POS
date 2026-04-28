@@ -418,6 +418,145 @@
 
 /* Tickets modal: print only #tickets-report-print-area (minimal kassarapport-style sheet) */
 @media print {
+  html:has(body.print-empties-report-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-empties-report-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-empties-report-only > * {
+    display: none !important;
+  }
+  body.print-empties-report-only [data-empties-print-content] {
+    display: block !important;
+  }
+  body.print-empties-report-only * {
+    visibility: hidden;
+  }
+  body.print-empties-report-only #empties-report-print-area,
+  body.print-empties-report-only #empties-report-print-area * {
+    visibility: visible;
+  }
+  body.print-empties-report-only #empties-report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 2mm 2mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #171717 !important;
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  body.print-empties-report-only #empties-report-print-area * {
+    color: #171717 !important;
+  }
+  body.print-empties-report-only [data-empties-print-content] {
+    position: static !important;
+    inset: auto !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+  body.print-empties-report-only [data-empties-print-scroll] {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+  body.print-empties-report-only [data-empties-print-content] > button {
+    display: none !important;
+  }
+}
+
+@media print {
+  html:has(body.print-time-clock-report-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-time-clock-report-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-time-clock-report-only > * {
+    display: none !important;
+  }
+  body.print-time-clock-report-only [data-time-clock-print-content] {
+    display: block !important;
+  }
+  body.print-time-clock-report-only * {
+    visibility: hidden;
+  }
+  body.print-time-clock-report-only #time-clock-report-print-area,
+  body.print-time-clock-report-only #time-clock-report-print-area * {
+    visibility: visible;
+  }
+  body.print-time-clock-report-only #time-clock-report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 2mm 2mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #171717 !important;
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  body.print-time-clock-report-only #time-clock-report-print-area * {
+    color: #171717 !important;
+  }
+  body.print-time-clock-report-only [data-time-clock-print-content] {
+    position: static !important;
+    inset: auto !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+  body.print-time-clock-report-only [data-time-clock-print-scroll] {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+  body.print-time-clock-report-only [data-time-clock-print-content] > button {
+    display: none !important;
+  }
+}
+
+/* Tickets modal: print only #tickets-report-print-area (minimal kassarapport-style sheet) */
+@media print {
   html:has(body.print-tickets-report-only) {
     margin: 0 !important;
     padding: 0 !important;

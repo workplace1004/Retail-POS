@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { POS_API_PREFIX as API } from '../lib/apiOrigin.js';
+import { posTerminalAuthHeaders } from '../lib/posTerminalSession.js';
 import { ProductLabelsModal } from './ProductLabelsModal';
 import { DiscountModal } from './DiscountModal';
 import {
@@ -37,6 +38,7 @@ const OPTION_BUTTON_LABELS = {
   historiek: { key: 'control.optionButton.history', fallback: 'History' },
   subtotaal: { key: 'control.optionButton.subtotal', fallback: 'Subtotal' },
   terugname: { key: 'control.optionButton.return', fallback: 'Return\nname' },
+  'check-in-out': { key: 'control.optionButton.checkInOut', fallback: 'Check in/out' },
   meer: { key: 'control.optionButton.more', fallback: 'More...' },
   'eat-in-take-out': { key: 'control.optionButton.eatInTakeOut', fallback: 'Take\nOut' },
   'externe-apps': { key: 'control.optionButton.externalApps', fallback: 'External\nApps' },
@@ -50,7 +52,16 @@ const KEYPAD_ROWS = [
   ['0', '1', '2', '3']
 ];
 
-export function Footer({ customersActive = false, onCustomersClick, showSubtotalView, subtotalButtonDisabled, onSubtotalClick, onHistoryClick }) {
+export function Footer({
+  currentUser = null,
+  customersActive = false,
+  onCustomersClick,
+  showSubtotalView,
+  subtotalButtonDisabled,
+  onSubtotalClick,
+  onHistoryClick,
+  onLogout,
+}) {
   const { t } = useLanguage();
   const tr = (key, fallback) => {
     const translated = t(key);
@@ -62,6 +73,10 @@ export function Footer({ customersActive = false, onCustomersClick, showSubtotal
   const [showPriceGroupModal, setShowPriceGroupModal] = useState(false);
   const [showProductLabelsModal, setShowProductLabelsModal] = useState(false);
   const [showDiscountModal, setShowDiscountModal] = useState(false);
+  const [checkInOutSaving, setCheckInOutSaving] = useState(false);
+  const [checkInOutError, setCheckInOutError] = useState('');
+  const [lastWorkTimeAction, setLastWorkTimeAction] = useState(null);
+  const [lastWorkTimeAt, setLastWorkTimeAt] = useState(null);
   const [priceGroups, setPriceGroups] = useState([]);
   const [priceGroupsLoading, setPriceGroupsLoading] = useState(false);
   const [extraBcInput, setExtraBcInput] = useState('');
@@ -134,11 +149,41 @@ export function Footer({ customersActive = false, onCustomersClick, showSubtotal
   );
 
   const getLabel = (id) => {
+    if (id === 'check-in-out') {
+      if (checkInOutSaving) return tr('control.checkInOut.saving', 'Saving...');
+      return lastWorkTimeAction === 'check_in'
+        ? tr('control.checkInOut.checkOut', 'Check out')
+        : tr('control.checkInOut.checkIn', 'Check in');
+    }
     const meta = OPTION_BUTTON_LABELS[id];
     if (!meta) return '';
     return tr(meta.key, meta.fallback);
   };
   const getTwoLineLabel = (id) => getLabel(id).replace(/\s*\n\s*/g, ' ').trim();
+  const formatWorkTimeTs = (value) => {
+    if (!value) return '-';
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toLocaleString();
+  };
+  const fetchWorkTimeStatus = async () => {
+    if (!currentUser?.id) return null;
+    try {
+      const res = await fetch(`${API}/users/${encodeURIComponent(currentUser.id)}/work-time-status`, {
+        headers: { ...posTerminalAuthHeaders() },
+      });
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => ({}));
+      const action = typeof data?.lastAction === 'string' ? data.lastAction : null;
+      const at = typeof data?.lastAt === 'string' ? data.lastAt : null;
+      setLastWorkTimeAction(action);
+      setLastWorkTimeAt(at);
+      return { action, at };
+    } catch {
+      // ignore status refresh failures
+      return null;
+    }
+  };
 
   const handleFooterButtonClick = (id) => {
     if (!id) return;
@@ -164,6 +209,34 @@ export function Footer({ customersActive = false, onCustomersClick, showSubtotal
       setShowDiscountModal(true);
       return;
     }
+    if (id === 'check-in-out') {
+      if (!currentUser?.id || checkInOutSaving) return;
+      setCheckInOutError('');
+      void (async () => {
+        setCheckInOutSaving(true);
+        try {
+          const action = lastWorkTimeAction === 'check_in' ? 'check_out' : 'check_in';
+          const res = await fetch(`${API}/users/${encodeURIComponent(currentUser.id)}/work-time-events`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...posTerminalAuthHeaders() },
+            body: JSON.stringify({ action }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            setCheckInOutError(data?.error || tr('control.checkInOut.saveFailed', 'Failed to save check in/out.'));
+            return;
+          }
+          setLastWorkTimeAction(data?.event?.action || action);
+          setLastWorkTimeAt(data?.event?.at || new Date().toISOString());
+          if (action === 'check_out') onLogout?.();
+        } catch {
+          setCheckInOutError(tr('control.checkInOut.saveFailed', 'Failed to save check in/out.'));
+        } finally {
+          setCheckInOutSaving(false);
+        }
+      })();
+      return;
+    }
     if (id === 'klanten') onCustomersClick?.();
     if (id === 'historiek') onHistoryClick?.();
     if (id === 'subtotaal') onSubtotalClick?.();
@@ -184,6 +257,11 @@ export function Footer({ customersActive = false, onCustomersClick, showSubtotal
     setExtraBcInput('');
     setActiveExtraBcButtonId('');
   };
+  useEffect(() => {
+    // Each new login starts with Check in action.
+    setLastWorkTimeAction(null);
+    setLastWorkTimeAt(null);
+  }, [currentUser?.id]);
   useEffect(() => {
     if (!showMoreMenu) return undefined;
     const handleDocumentMouseDown = (event) => {

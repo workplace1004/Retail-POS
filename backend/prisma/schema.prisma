@@ -14,6 +14,20 @@ model User {
   pin   String
   orders Order[]
   posRegisterLinks PosRegisterUser[]
+  workTimeEvents UserWorkTimeEvent[]
+}
+
+model UserWorkTimeEvent {
+  id        Int      @id @default(autoincrement())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action    String
+  at        DateTime
+  startAt   DateTime?
+  endAt     DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, at])
 }
 
 /// LAN POS terminal registered by IP in webpanel; users must be linked to log in from that IP.

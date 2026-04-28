@@ -22,7 +22,7 @@ import { usePos } from './hooks/usePos';
 import { POS_API_PREFIX as API, POS_SOCKET_ORIGIN } from './lib/apiOrigin.js';
 import { isLicenseEnforcementEnabled, runStartupLicenseCheck } from './lib/posWebLicense.js';
 import { OPTION_LAYOUT_POLL_MS, POS_DEVICE_SETTINGS_CHANGED_EVENT } from './lib/optionButtonLayout.ts';
-import { setPosTerminalToken, clearPosTerminalToken, posTerminalAuthHeaders } from './lib/posTerminalSession.js';
+import { setPosTerminalToken, posTerminalAuthHeaders } from './lib/posTerminalSession.js';
 
 const USER_STORAGE_KEY = 'pos-user';
 const VIEW_STORAGE_KEY = 'pos-view';
@@ -410,10 +410,10 @@ export default function App() {
     setUser(null);
     posSessionBootstrappedRef.current = false;
     setIsPosBootstrapReady(false);
+    setDeviceCheck('ok');
     try {
       localStorage.removeItem(USER_STORAGE_KEY);
     } catch { }
-    clearPosTerminalToken();
   };
 
   const handleControlClick = useCallback(() => {
@@ -600,12 +600,14 @@ export default function App() {
           appendSubproductNoteToItem={appendSubproductNoteToItem}
         />
         <Footer
+          currentUser={user}
           customersActive={showCustomersModal}
           onCustomersClick={() => setShowCustomersModal(true)}
           showSubtotalView={showSubtotalView}
           subtotalButtonDisabled={subtotalButtonDisabled}
           onSubtotalClick={handleSubtotalClick}
           onHistoryClick={() => setShowHistoryModal(true)}
+          onLogout={handleLogout}
         />
       </div>
       <OrderPanel

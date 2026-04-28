@@ -72,6 +72,11 @@ import {
   downloadPeriodicReportPdf,
 } from "@/lib/periodicReportPdf";
 import { BEST_REPORT_PRINT_AREA_ID, buildBestReportPdfFileName, downloadBestReportPdf } from "@/lib/bestReportPdf";
+import {
+  TIME_CLOCK_REPORT_PRINT_AREA_ID,
+  buildTimeClockReportPdfFileName,
+  downloadTimeClockReportPdf,
+} from "@/lib/timeClockReportPdf";
 
 const PERIODIC_REPORT_PRINT_BODY_CLASS = "print-periodic-report-only";
 const BEST_REPORT_PRINT_BODY_CLASS = "print-best-report-only";
@@ -433,6 +438,18 @@ type StockReportRow = {
   margin: number;
 };
 
+type TimeClockReportRow = {
+  id: string;
+  userId: string;
+  userName: string;
+  startAt: string | null;
+  endAt: string | null;
+  hours: number;
+};
+
+type EmptiesTotals = { out: number; in: number; diff: number };
+type EmptiesRow = { label: string; out: number; in: number; diff: number };
+
 type BestSellersMode = "best25" | "worst25" | "p80" | "cust10";
 type BestSellersDisplay = "text" | "pie" | "bar";
 type BestSellersEntity = "products" | "customers";
@@ -481,9 +498,21 @@ function reportHourLabel(h: string) {
   return `${h}:00`;
 }
 
+function formatTimeClockDuration(totalSeconds: number) {
+  const sec = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  if (sec < 60) return `${sec}s`;
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  const seconds = sec % 60;
+  if (hours > 0) return seconds > 0 ? `${hours}h ${minutes}m ${seconds}s` : `${hours}h ${minutes}m`;
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
 const SUPPLIER_REPORT_PRINT_BODY_CLASS = "print-supplier-report-only";
 const STOCK_REPORT_PRINT_BODY_CLASS = "print-stock-report-only";
 const TICKETS_REPORT_PRINT_BODY_CLASS = "print-tickets-report-only";
+const TIME_CLOCK_REPORT_PRINT_BODY_CLASS = "print-time-clock-report-only";
+const EMPTIES_REPORT_PRINT_BODY_CLASS = "print-empties-report-only";
 
 /** Print only the report sheet (see `#supplier-report-print-area` + `index.css` @media print). */
 function printSupplierReportMain() {
@@ -558,6 +587,34 @@ function printBestReportMain() {
   window.print();
 }
 
+function printTimeClockReportMain() {
+  document.body.classList.add(TIME_CLOCK_REPORT_PRINT_BODY_CLASS);
+  let finished = false;
+  const removeClass = () => {
+    if (finished) return;
+    finished = true;
+    document.body.classList.remove(TIME_CLOCK_REPORT_PRINT_BODY_CLASS);
+    window.removeEventListener("afterprint", removeClass);
+  };
+  window.addEventListener("afterprint", removeClass);
+  window.setTimeout(removeClass, 2000);
+  window.print();
+}
+
+function printEmptiesReportMain() {
+  document.body.classList.add(EMPTIES_REPORT_PRINT_BODY_CLASS);
+  let finished = false;
+  const removeClass = () => {
+    if (finished) return;
+    finished = true;
+    document.body.classList.remove(EMPTIES_REPORT_PRINT_BODY_CLASS);
+    window.removeEventListener("afterprint", removeClass);
+  };
+  window.addEventListener("afterprint", removeClass);
+  window.setTimeout(removeClass, 2000);
+  window.print();
+}
+
 const Reports = () => {
   const { t, lang } = useLanguage();
   const { user } = useAuth();
@@ -604,12 +661,31 @@ const Reports = () => {
   const [ticketExpandErrors, setTicketExpandErrors] = useState<Record<string, string>>({});
   const [zSubTab, setZSubTab] = useState<"history" | "create">("history");
   const [exportOpen, setExportOpen] = useState(false);
+  const [exportType, setExportType] = useState("orders");
   const [exportFrom, setExportFrom] = useState<Date>(new Date());
   const [exportTo, setExportTo] = useState<Date>(new Date());
   const [reportUsers, setReportUsers] = useState<ReportPosUser[]>([]);
   const [reportUserFilter, setReportUserFilter] = useState("all");
   const [reportRegisters, setReportRegisters] = useState<ReportPosRegister[]>([]);
   const [reportRegisterFilter, setReportRegisterFilter] = useState("all");
+  const [clockFromHour, setClockFromHour] = useState("0");
+  const [clockToHour, setClockToHour] = useState("24");
+  const [emptiesReportType, setEmptiesReportType] = useState<"pieces" | "liters" | "kg" | "meters">("pieces");
+  const [emptiesReportOpen, setEmptiesReportOpen] = useState(false);
+  const [emptiesReportOpenedAt, setEmptiesReportOpenedAt] = useState<Date | null>(null);
+  const [emptiesReportLoading, setEmptiesReportLoading] = useState(false);
+  const [emptiesCategoryTotals, setEmptiesCategoryTotals] = useState<EmptiesTotals>({ out: 0, in: 0, diff: 0 });
+  const [emptiesProductTotals, setEmptiesProductTotals] = useState<EmptiesTotals>({ out: 0, in: 0, diff: 0 });
+  const [emptiesTransactionTotals, setEmptiesTransactionTotals] = useState<EmptiesTotals>({ out: 0, in: 0, diff: 0 });
+  const [emptiesCategoryRows, setEmptiesCategoryRows] = useState<EmptiesRow[]>([]);
+  const [emptiesProductRows, setEmptiesProductRows] = useState<EmptiesRow[]>([]);
+  const [emptiesTransactionRows, setEmptiesTransactionRows] = useState<EmptiesRow[]>([]);
+  const [timeClockReportOpen, setTimeClockReportOpen] = useState(false);
+  const [timeClockReportOpenedAt, setTimeClockReportOpenedAt] = useState<Date | null>(null);
+  const [timeClockReportLoading, setTimeClockReportLoading] = useState(false);
+  const [timeClockReportRows, setTimeClockReportRows] = useState<TimeClockReportRow[]>([]);
+  const [timeClockPdfWorking, setTimeClockPdfWorking] = useState(false);
+  const timeClockPdfLockRef = useRef(false);
   const [periodicFromHour, setPeriodicFromHour] = useState("0");
   const [periodicToHour, setPeriodicToHour] = useState("24");
   const [periodicLayout, setPeriodicLayout] = useState<Record<PeriodicSectionKey, PeriodicSide>>(() => {
@@ -776,6 +852,69 @@ const Reports = () => {
         : reportUsers.find((u) => u.id === reportUserFilter)?.name ?? "—",
     [reportUserFilter, reportUsers, t],
   );
+  const timeClockUserLabel = useMemo(
+    () => (reportUserFilter === "all" ? t("reportTotalsAllUsers") : `${t("user")}: ${ticketReportUserLabel}`),
+    [reportUserFilter, t, ticketReportUserLabel],
+  );
+  const timeClockRowsForDisplay = useMemo(
+    () =>
+      timeClockReportRows.map((r) => ({
+        id: r.id,
+        userId: r.userId,
+        name: r.userName,
+        start: r.startAt ? parseISO(r.startAt) : null,
+        stop: r.endAt ? parseISO(r.endAt) : null,
+        durationSeconds:
+          r.startAt && r.endAt
+            ? Math.max(0, Math.round((Date.parse(r.endAt) - Date.parse(r.startAt)) / 1000))
+            : Math.max(0, Math.round((Number(r.hours) || 0) * 3600)),
+      })),
+    [timeClockReportRows],
+  );
+  const timeClockGroupedRows = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        userId: string;
+        name: string;
+        entries: Array<{
+          id: string;
+          start: Date | null;
+          stop: Date | null;
+          durationSeconds: number;
+        }>;
+        totalSeconds: number;
+      }
+    >();
+    for (const row of timeClockRowsForDisplay) {
+      const key = row.userId || row.name;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.entries.push({
+          id: row.id,
+          start: row.start,
+          stop: row.stop,
+          durationSeconds: row.durationSeconds,
+        });
+        existing.totalSeconds += row.durationSeconds;
+      } else {
+        grouped.set(key, {
+          userId: row.userId,
+          name: row.name,
+          entries: [
+            {
+              id: row.id,
+              start: row.start,
+              stop: row.stop,
+              durationSeconds: row.durationSeconds,
+            },
+          ],
+          totalSeconds: row.durationSeconds,
+        });
+      }
+    }
+    return Array.from(grouped.values());
+  }, [timeClockRowsForDisplay]);
 
   const ticketReportRegisterLabel = useMemo(
     () =>
@@ -1087,6 +1226,87 @@ const Reports = () => {
     }
   }, [reportSupplierFilter, fromDate, toDate, supplierFromHour, supplierToHour, ticketHourToTime]);
 
+  const openTimeClockReport = useCallback(async () => {
+    setTimeClockReportLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        startDate: format(fromDate, "dd-MM-yyyy"),
+        startTime: ticketHourToTime(clockFromHour),
+        endDate: format(toDate, "dd-MM-yyyy"),
+        endTime: ticketHourToTime(clockToHour),
+        userId: reportUserFilter,
+      });
+      const data = await apiRequest<{ rows?: TimeClockReportRow[] }>(`/api/webpanel/reports/time-clock?${qs.toString()}`);
+      setTimeClockReportRows(Array.isArray(data?.rows) ? data.rows : []);
+      setTimeClockReportOpenedAt(new Date());
+      setTimeClockReportOpen(true);
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to load time clock report.",
+      });
+    } finally {
+      setTimeClockReportLoading(false);
+    }
+  }, [fromDate, toDate, clockFromHour, clockToHour, reportUserFilter, ticketHourToTime]);
+
+  const openEmptiesReport = useCallback(async () => {
+    setEmptiesReportLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        startDate: format(fromDate, "dd-MM-yyyy"),
+        startTime: ticketHourToTime(clockFromHour),
+        endDate: format(toDate, "dd-MM-yyyy"),
+        endTime: ticketHourToTime(clockToHour),
+        mode: emptiesReportType,
+      });
+      const data = await apiRequest<{
+        categories?: { totals?: Partial<EmptiesTotals>; rows?: EmptiesRow[] };
+        products?: { totals?: Partial<EmptiesTotals>; rows?: EmptiesRow[] };
+        transactions?: { totals?: Partial<EmptiesTotals>; rows?: EmptiesRow[] };
+      }>(`/api/webpanel/reports/empties?${qs.toString()}`);
+      const toTotals = (v?: Partial<EmptiesTotals>): EmptiesTotals => ({
+        out: Math.round((Number(v?.out) || 0) * 100) / 100,
+        in: Math.round((Number(v?.in) || 0) * 100) / 100,
+        diff: Math.round((Number(v?.diff) || 0) * 100) / 100,
+      });
+      setEmptiesCategoryTotals(toTotals(data?.categories?.totals));
+      setEmptiesProductTotals(toTotals(data?.products?.totals));
+      setEmptiesTransactionTotals(toTotals(data?.transactions?.totals));
+      setEmptiesCategoryRows(Array.isArray(data?.categories?.rows) ? data.categories.rows : []);
+      setEmptiesProductRows(Array.isArray(data?.products?.rows) ? data.products.rows : []);
+      setEmptiesTransactionRows(Array.isArray(data?.transactions?.rows) ? data.transactions.rows : []);
+      setEmptiesReportOpenedAt(new Date());
+      setEmptiesReportOpen(true);
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to load empties report.",
+      });
+    } finally {
+      setEmptiesReportLoading(false);
+    }
+  }, [fromDate, toDate, clockFromHour, clockToHour, emptiesReportType, ticketHourToTime]);
+
+  const downloadTimeClockPdf = useCallback(async () => {
+    if (timeClockPdfLockRef.current) return;
+    timeClockPdfLockRef.current = true;
+    setTimeClockPdfWorking(true);
+    try {
+      const base = buildTimeClockReportPdfFileName(["time-clock-report", format(new Date(), "yyyy-MM-dd-HHmm")]);
+      await downloadTimeClockReportPdf(base);
+      toast({ description: t("reportPdfDownloaded") });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : t("reportPdfFailed"),
+      });
+    } finally {
+      timeClockPdfLockRef.current = false;
+      setTimeClockPdfWorking(false);
+    }
+  }, [t]);
+
   const bestReportPeriodLine = useMemo(() => {
     if (!bestReportPayload?.periodStart) return "";
     try {
@@ -1379,6 +1599,16 @@ const Reports = () => {
       document.body.classList.remove(BEST_REPORT_PRINT_BODY_CLASS);
     }
   }, [bestReportOpen]);
+  useEffect(() => {
+    if (!timeClockReportOpen) {
+      document.body.classList.remove(TIME_CLOCK_REPORT_PRINT_BODY_CLASS);
+    }
+  }, [timeClockReportOpen]);
+  useEffect(() => {
+    if (!emptiesReportOpen) {
+      document.body.classList.remove(EMPTIES_REPORT_PRINT_BODY_CLASS);
+    }
+  }, [emptiesReportOpen]);
 
   const tabs = [
     { id: "tickets", label: t("tickets"), icon: <Ticket className="h-4 w-4" /> },
@@ -1389,6 +1619,20 @@ const Reports = () => {
     { id: "stock", label: t("stock"), icon: <Boxes className="h-4 w-4" /> },
     { id: "clock", label: t("timeClock"), icon: <Clock className="h-4 w-4" /> },
     { id: "suppliers", label: t("suppliers"), icon: <Truck className="h-4 w-4" /> },
+  ];
+  const exportTypeOptions = [
+    { value: "orders", label: t("orders") },
+    { value: "orders-with-product-detail", label: t("ordersWithProductDetail") },
+    { value: "product-totals", label: t("productTotals") },
+    { value: "product-margins", label: t("productMargins") },
+    { value: "z-reports", label: t("zReports") },
+    { value: "products-revenue-per-day", label: t("productsRevenuePerDay") },
+    { value: "products-count-per-day", label: t("productsCountPerDay") },
+    { value: "stock", label: t("stock") },
+    { value: "invoices", label: t("invoices") },
+    { value: "credit-notes", label: t("creditNotes") },
+    { value: "vouchers", label: t("vouchers") },
+    { value: "stored-value-topup-cards", label: t("storedValueTopupCards") },
   ];
   const bestChartColors = [
     "#1f334d",
@@ -1433,10 +1677,14 @@ const Reports = () => {
             <div className="space-y-4">
               <div className="grid grid-cols-[100px_1fr] items-center gap-3">
                 <Label className="text-sm">{t("type")} :</Label>
-                <Select defaultValue="orders">
+                <Select value={exportType} onValueChange={setExportType}>
                   <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="orders">{t("orders")}</SelectItem>
+                    {exportTypeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -1870,13 +2118,13 @@ const Reports = () => {
               <div className="grid grid-cols-[120px_1fr] items-center gap-4">
                 <Label className="text-sm font-medium text-foreground">{t("period")}</Label>
                 <div className="flex items-center gap-2">
-                  <Select defaultValue="0">
+                  <Select value={clockFromHour} onValueChange={setClockFromHour}>
                     <SelectTrigger className="w-23"><SelectValue /></SelectTrigger>
                     <SelectContent>{Array.from({ length: 25 }).map((_, i) => <SelectItem key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</SelectItem>)}</SelectContent>
                   </Select>
                   <DatePickerField value={fromDate} onChange={setFromDate} disabled={reportRangeFromCalendarDisabled} />
                   <span className="text-xs text-muted-foreground">{t("until")}</span>
-                  <Select defaultValue="24">
+                  <Select value={clockToHour} onValueChange={setClockToHour}>
                     <SelectTrigger className="w-23"><SelectValue /></SelectTrigger>
                     <SelectContent>{Array.from({ length: 25 }).map((_, i) => <SelectItem key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</SelectItem>)}</SelectContent>
                   </Select>
@@ -1886,23 +2134,137 @@ const Reports = () => {
 
               <div className="grid grid-cols-[120px_1fr] items-center gap-4">
                 <Label className="text-sm font-medium">{t("report")}</Label>
-                <Select defaultValue="pieces">
+                <Select value={emptiesReportType} onValueChange={(v) => setEmptiesReportType(v as "pieces" | "liters" | "kg" | "meters")}>
                   <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pieces">{t("piecesQty")}</SelectItem>
+                    <SelectItem value="liters">{t("litersQty")}</SelectItem>
+                    <SelectItem value="kg">{t("kgQty")}</SelectItem>
+                    <SelectItem value="meters">{t("metersQty")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="pt-3 flex justify-center">
-                <Button className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6">
-                  <Cloud className="h-4 w-4" /> {t("showReport")}
+                <Button
+                  type="button"
+                  className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6"
+                  disabled={emptiesReportLoading}
+                  onClick={() => void openEmptiesReport()}
+                >
+                  {emptiesReportLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}{" "}
+                  {t("showReport")}
                 </Button>
               </div>
             </div>
           </Card>
         </div>
       )}
+
+      <Dialog open={emptiesReportOpen} onOpenChange={setEmptiesReportOpen}>
+        <DialogContent
+          data-empties-print-content
+          className={cn(
+            "flex h-full max-h-[90vh] min-h-[90vh] w-[96vw] max-w-5xl flex-col gap-0 overflow-hidden border-border bg-muted p-0 text-foreground shadow-2xl sm:rounded-lg",
+            "[&>button]:text-muted-foreground [&>button]:hover:bg-accent [&>button]:hover:text-foreground",
+            "[&>button]:top-[9px]",
+          )}
+        >
+          <DialogTitle className="sr-only">{t("empties")}</DialogTitle>
+          <div className="flex h-[50px] min-h-[50px] max-h-[50px] shrink-0 items-center justify-center gap-10 border-b border-border bg-card">
+            <button
+              type="button"
+              title={t("print")}
+              className="flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => printEmptiesReportMain()}
+            >
+              <Printer className="h-5 w-5" />
+            </button>
+            <button type="button" title={t("reportPdfAction")} className="flex items-center justify-center text-muted-foreground opacity-40" disabled>
+              <FileText className="h-5 w-5" />
+            </button>
+          </div>
+          <div data-empties-print-scroll className="h-full overflow-y-auto bg-muted/60 p-4 sm:p-5 print:bg-white print:p-0">
+            <div id="empties-report-print-area" className="mx-auto min-h-full max-w-4xl bg-card px-8 pb-10 pt-8 text-foreground sm:px-10">
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                <div>
+                  <p className="text-2xl font-bold leading-tight text-foreground">{t("reportDefaultBusinessName")}</p>
+                  <p className="mt-2 text-lg text-muted-foreground">Leeggoed rapport</p>
+                  <p className="mt-1 text-base font-medium text-foreground">
+                    {emptiesReportType === "liters"
+                      ? "LITERS"
+                      : emptiesReportType === "kg"
+                        ? t("kgQty")
+                        : emptiesReportType === "meters"
+                          ? t("metersQty")
+                          : t("piecesQty")}
+                  </p>
+                </div>
+                <div className="space-y-1 text-right text-sm text-muted-foreground">
+                  <p>
+                    {reportHourLabel(clockFromHour)} {format(fromDate, "dd-MM-yyyy")} {t("reportPeriodThrough")}{" "}
+                    {reportHourLabel(clockToHour)} {format(toDate, "dd-MM-yyyy")}
+                  </p>
+                  <p>{t("reportPrintedOn")} {emptiesReportOpenedAt ? format(emptiesReportOpenedAt, "HH:mm dd-MM-yyyy") : "—"}</p>
+                  <p>{t("reportBy")} {user?.email ?? "—"}</p>
+                </div>
+              </div>
+
+              <div className="mt-7 space-y-4">
+                {[
+                  { key: "categories", label: lang === "nl" ? "Categorieën" : "Categories", totals: emptiesCategoryTotals, rows: emptiesCategoryRows },
+                  { key: "products", label: lang === "nl" ? "Producten" : "Products", totals: emptiesProductTotals, rows: emptiesProductRows },
+                  { key: "transactions", label: lang === "nl" ? "Transacties" : "Transactions", totals: emptiesTransactionTotals, rows: emptiesTransactionRows },
+                ].map((section) => (
+                  <div key={section.key} className="p-3">
+                    <p className="mb-3 text-center text-lg text-foreground">{section.label}</p>
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { key: "out", label: lang === "nl" ? "Uit" : "Out" },
+                        { key: "in", label: lang === "nl" ? "In" : "In" },
+                        { key: "diff", label: lang === "nl" ? "Verschil" : "Difference" },
+                      ].map((col) => {
+                        const totals = section.totals;
+                        const val = totals[col.key as keyof EmptiesTotals];
+                        const rowsToShow = section.rows.slice(0, 8);
+                        return (
+                        <div key={`${section.key}-${col.key}`} className="rounded border border-border px-4 py-3">
+                          <p className="text-center text-foreground">{col.label}</p>
+                          <div className="mt-3 space-y-1 text-xs text-foreground">
+                            {rowsToShow.length > 0 ? (
+                              rowsToShow.map((r) => {
+                                const rowVal = Number(r[col.key as keyof EmptiesTotals]) || 0;
+                                return (
+                                  <div key={`${section.key}-${col.key}-${r.label}`} className="flex items-center justify-between gap-2">
+                                    <span className="truncate">{r.label}</span>
+                                    <span className="tabular-nums">{formatPeriodicReportMoney(rowVal)}</span>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div className="text-muted-foreground">—</div>
+                            )}
+                          </div>
+                          <p className="mt-3 text-right text-sm text-foreground">
+                            {emptiesReportType === "liters"
+                              ? `Totaal Liter : ${formatPeriodicReportMoney(val)}`
+                              : emptiesReportType === "kg"
+                                ? `${t("kgQty")} : ${formatPeriodicReportMoney(val)}`
+                                : emptiesReportType === "meters"
+                                  ? `${t("metersQty")} : ${formatPeriodicReportMoney(val)}`
+                                  : `${t("piecesQty")} : ${formatPeriodicReportMoney(val)}`}
+                          </p>
+                        </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {!exportOpen && tab === "stock" && (
         <div className="flex justify-center">
@@ -1972,13 +2334,13 @@ const Reports = () => {
               <div className="grid grid-cols-[120px_1fr] items-center gap-4">
                 <Label className="text-sm font-medium text-foreground">{t("period")}</Label>
                 <div className="flex items-center gap-2">
-                  <Select defaultValue="0">
+                  <Select value={clockFromHour} onValueChange={setClockFromHour}>
                     <SelectTrigger className="w-23"><SelectValue /></SelectTrigger>
                     <SelectContent>{Array.from({ length: 25 }).map((_, i) => <SelectItem key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</SelectItem>)}</SelectContent>
                   </Select>
                   <DatePickerField value={fromDate} onChange={setFromDate} disabled={reportRangeFromCalendarDisabled} />
                   <span className="text-xs text-muted-foreground">{t("until")}</span>
-                  <Select defaultValue="24">
+                  <Select value={clockToHour} onValueChange={setClockToHour}>
                     <SelectTrigger className="w-23"><SelectValue /></SelectTrigger>
                     <SelectContent>{Array.from({ length: 25 }).map((_, i) => <SelectItem key={i} value={String(i)}>{String(i).padStart(2, '0')}:00</SelectItem>)}</SelectContent>
                   </Select>
@@ -1997,14 +2359,123 @@ const Reports = () => {
               </div>
 
               <div className="pt-3 flex justify-center">
-                <Button className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6">
-                  <Cloud className="h-4 w-4" /> {t("showReport")}
+                <Button
+                  type="button"
+                  className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6"
+                  disabled={timeClockReportLoading}
+                  onClick={() => void openTimeClockReport()}
+                >
+                  {timeClockReportLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}{" "}
+                  {t("showReport")}
                 </Button>
               </div>
             </div>
           </Card>
         </div>
       )}
+
+      <Dialog open={timeClockReportOpen} onOpenChange={setTimeClockReportOpen}>
+        <DialogContent
+          data-time-clock-print-content
+          className={cn(
+            "flex h-full max-h-[90vh] min-h-[90vh] w-[96vw] max-w-5xl flex-col gap-0 overflow-hidden border-border bg-muted p-0 text-foreground shadow-2xl sm:rounded-lg",
+            "[&>button]:text-muted-foreground [&>button]:hover:bg-accent [&>button]:hover:text-foreground",
+            "[&>button]:top-[9px]",
+          )}
+        >
+          <DialogTitle className="sr-only">{t("timeClock")}</DialogTitle>
+          <div className="flex h-[50px] min-h-[50px] max-h-[50px] shrink-0 items-center justify-center gap-10 border-b border-border bg-card">
+            <button
+              type="button"
+              title={t("print")}
+              className="flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => printTimeClockReportMain()}
+            >
+              <Printer className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              title={t("reportPdfAction")}
+              disabled={timeClockPdfWorking}
+              className="flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => void downloadTimeClockPdf()}
+            >
+              {timeClockPdfWorking ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : <FileText className="h-5 w-5" />}
+            </button>
+          </div>
+          <div data-time-clock-print-scroll className="h-full overflow-y-auto bg-muted/60 p-4 sm:p-5 print:bg-white print:p-0">
+            <div
+              id={TIME_CLOCK_REPORT_PRINT_AREA_ID}
+              className="mx-auto max-w-4xl rounded-lg border border-border bg-background p-5 text-foreground shadow-sm print:max-w-none print:border-0 print:shadow-none"
+            >
+              <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-2xl font-bold leading-tight tracking-tight">{t("reportDefaultBusinessName")}</p>
+                  <p className="mt-2 text-lg text-muted-foreground">{t("timeClock")}</p>
+                </div>
+                <div className="space-y-1 text-sm text-muted-foreground sm:text-right">
+                  <p>
+                    {reportHourLabel(clockFromHour)} {format(fromDate, "dd-MM-yyyy")} {t("reportPeriodThrough")}{" "}
+                    {reportHourLabel(clockToHour)} {format(toDate, "dd-MM-yyyy")}
+                  </p>
+                  <p>
+                    {t("reportPrintedOn")} {timeClockReportOpenedAt ? format(timeClockReportOpenedAt, "HH:mm dd-MM-yyyy") : "—"}
+                  </p>
+                  <p>{t("reportBy")} {user?.email ?? "—"}</p>
+                  <p>{timeClockUserLabel}</p>
+                  <p>{t("reportTotalsAllRegisters")}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-md border border-border bg-card">
+                <Table className="text-sm">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t("name")}</TableHead>
+                      <TableHead>{lang === "nl" ? "Start" : "Start"}</TableHead>
+                      <TableHead>{lang === "nl" ? "Stop" : "Stop"}</TableHead>
+                      <TableHead className="text-right">{lang === "nl" ? "Uren" : "Hours"}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {timeClockGroupedRows.length ? (
+                      timeClockGroupedRows.map((group, groupIdx) => (
+                        <Fragment key={`time-clock-group-${group.userId || group.name}`}>
+                          {group.entries.map((entry, idx) => (
+                            <TableRow
+                              key={`time-clock-entry-${entry.id}`}
+                              className={groupIdx > 0 && idx === 0 ? "border-t-2 border-border" : undefined}
+                            >
+                              <TableCell className="font-medium">{idx === 0 ? group.name : ""}</TableCell>
+                              <TableCell>{entry.start ? format(entry.start, "HH:mm:ss dd-MM-yyyy") : "—"}</TableCell>
+                              <TableCell>{entry.stop ? format(entry.stop, "HH:mm:ss dd-MM-yyyy") : "—"}</TableCell>
+                              <TableCell className="text-right tabular-nums">{formatTimeClockDuration(entry.durationSeconds)}</TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow>
+                            <TableCell className="font-semibold">{t("total")} :</TableCell>
+                            <TableCell />
+                            <TableCell />
+                            <TableCell className="text-right font-semibold tabular-nums">
+                              {formatTimeClockDuration(group.totalSeconds)}
+                            </TableCell>
+                          </TableRow>
+                        </Fragment>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-muted-foreground">
+                          —
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {!exportOpen && tab === "suppliers" && (
         <div className="flex justify-center">

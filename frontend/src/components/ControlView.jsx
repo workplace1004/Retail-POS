@@ -2950,8 +2950,6 @@ export function ControlView({
     const rawOptLayout =
       pickOptionButtonLayoutFromDeviceSettings(saved, posOptionLayoutRegisterKeyRef.current) ?? saved.optionButtonLayout;
     if (rawOptLayout != null) setOptionButtonSlots(normalizeOptionButtonSlots(rawOptLayout));
-    setSelectedFunctionButtonSlotIndex(null);
-    setSelectedOptionButtonSlotIndex(null);
   };
 
   const applyDeviceSettingsRef = useRef(applyDeviceSettingsToState);

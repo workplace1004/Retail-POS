@@ -507,6 +507,13 @@ function parseProductStockQty(stockStr, weegschaal, unitField) {
   return { qty: q, qtyLabel: `${num} ${unit}` };
 }
 
+function parseNumberLoose(val) {
+  const s = String(val ?? '').trim().replace(/\s/g, '').replace(',', '.');
+  if (!s) return 0;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /** Webpanel: stock list (qty × prices) for POS-style stock report modal. */
 app.get('/api/webpanel/reports/stock', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
@@ -676,6 +683,235 @@ app.get('/api/webpanel/reports/periodic', async (req, res) => {
   } catch (err) {
     console.error('GET /api/webpanel/reports/periodic', err);
     return res.status(500).json({ error: err.message || 'Failed to build periodic report' });
+  }
+});
+
+/** Webpanel: time clock sessions from UserWorkTimeEvent (start/end + hours). */
+app.get('/api/webpanel/reports/time-clock', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const startDate = sanitizeReportQueryParam(req.query.startDate, 32);
+  const endDate = sanitizeReportQueryParam(req.query.endDate, 32);
+  const startTime = sanitizeReportQueryParam(req.query.startTime, 8);
+  const endTime = sanitizeReportQueryParam(req.query.endTime, 8);
+  const parsed = parsePeriodicReportRange(startDate, startTime, endDate, endTime);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const userId = sanitizeReportQueryParam(req.query.userId, 128);
+  try {
+    await ensureUserWorkTimeEventsTable();
+    const startIso = parsed.start.toISOString();
+    const endIso = parsed.endExclusive.toISOString();
+    const baseRows =
+      userId && userId !== 'all'
+        ? await prisma.$queryRaw`
+            SELECT
+              w."id" AS "id",
+              w."userId" AS "userId",
+              COALESCE(u."name", w."userId") AS "userName",
+              w."action" AS "action",
+              w."at" AS "at",
+              w."startAt" AS "startAt",
+              w."endAt" AS "endAt"
+            FROM "UserWorkTimeEvent" w
+            LEFT JOIN "User" u ON u."id" = w."userId"
+            WHERE w."userId" = ${userId}
+              AND COALESCE(w."startAt", w."at") >= ${startIso}
+              AND COALESCE(w."startAt", w."at") < ${endIso}
+            ORDER BY "userName" ASC, COALESCE(w."startAt", w."at") ASC, w."id" ASC
+          `
+        : await prisma.$queryRaw`
+            SELECT
+              w."id" AS "id",
+              w."userId" AS "userId",
+              COALESCE(u."name", w."userId") AS "userName",
+              w."action" AS "action",
+              w."at" AS "at",
+              w."startAt" AS "startAt",
+              w."endAt" AS "endAt"
+            FROM "UserWorkTimeEvent" w
+            LEFT JOIN "User" u ON u."id" = w."userId"
+            WHERE COALESCE(w."startAt", w."at") >= ${startIso}
+              AND COALESCE(w."startAt", w."at") < ${endIso}
+            ORDER BY "userName" ASC, COALESCE(w."startAt", w."at") ASC, w."id" ASC
+          `;
+    const rows = (Array.isArray(baseRows) ? baseRows : []).map((r) => {
+      const startIso = r.startAt ? String(r.startAt) : r.action === 'check_in' ? String(r.at || '') : '';
+      const endIso = r.endAt ? String(r.endAt) : r.action === 'check_out' ? String(r.at || '') : '';
+      const startMs = startIso ? Date.parse(startIso) : NaN;
+      const endMs = endIso ? Date.parse(endIso) : NaN;
+      const hours = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs
+        ? Math.round(((endMs - startMs) / 3600000) * 100) / 100
+        : 0;
+      return {
+        id: String(r.id),
+        userId: String(r.userId || ''),
+        userName: String(r.userName || r.userId || '—'),
+        startAt: Number.isFinite(startMs) ? new Date(startMs).toISOString() : null,
+        endAt: Number.isFinite(endMs) ? new Date(endMs).toISOString() : null,
+        hours,
+      };
+    });
+    const totalsByUser = {};
+    for (const row of rows) {
+      const key = row.userId || row.userName;
+      totalsByUser[key] = Math.round(((totalsByUser[key] || 0) + (Number(row.hours) || 0)) * 100) / 100;
+    }
+    return res.json({
+      rows,
+      totalsByUser,
+      periodStart: parsed.start.toISOString(),
+      periodEndExclusive: parsed.endExclusive.toISOString(),
+    });
+  } catch (err) {
+    console.error('GET /api/webpanel/reports/time-clock', err);
+    return res.status(500).json({ error: err.message || 'Failed to build time clock report' });
+  }
+});
+
+/** Webpanel: empties report totals (categories/products/transactions) from paid orders. */
+app.get('/api/webpanel/reports/empties', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const startDate = sanitizeReportQueryParam(req.query.startDate, 32);
+  const endDate = sanitizeReportQueryParam(req.query.endDate, 32);
+  const startTime = sanitizeReportQueryParam(req.query.startTime, 8);
+  const endTime = sanitizeReportQueryParam(req.query.endTime, 8);
+  const parsed = parsePeriodicReportRange(startDate, startTime, endDate, endTime);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const rawMode = String(req.query.mode || 'pieces').toLowerCase();
+  const mode = ['pieces', 'liters', 'kg', 'meters'].includes(rawMode) ? rawMode : 'pieces';
+  try {
+    const emptiesProducts = await prisma.product.findMany({
+      where: { leeggoedPrijs: { not: null } },
+      include: {
+        category: { select: { id: true, name: true } },
+        supplier: { select: { id: true, companyName: true } },
+      },
+      orderBy: [{ name: 'asc' }],
+    });
+
+    const orders = await prisma.order.findMany({
+      where: {
+        status: 'paid',
+        updatedAt: { gte: parsed.start, lt: parsed.endExclusive },
+      },
+      include: {
+        items: {
+          include: {
+            product: {
+              include: {
+                category: { select: { id: true, name: true } },
+                supplier: { select: { id: true, companyName: true } },
+              },
+            },
+          },
+        },
+      },
+      orderBy: [{ updatedAt: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const categoryMap = new Map();
+    const productMap = new Map();
+    const txMap = new Map();
+
+    const addToBucket = (map, key, label, outDelta, inDelta) => {
+      const prev = map.get(key) || { label, out: 0, in: 0 };
+      prev.out += Number(outDelta) || 0;
+      prev.in += Number(inDelta) || 0;
+      map.set(key, prev);
+    };
+
+    const convertQtyByMode = (qty, unitContentRaw) => {
+      const unitFactor = Math.max(0, parseNumberLoose(unitContentRaw));
+      if (mode === 'pieces') return qty;
+      return qty * (unitFactor > 0 ? unitFactor : 1);
+    };
+
+    // "In" side: stock received / available per supplier-linked empties products.
+    for (const p of emptiesProducts) {
+      const leeggoedPrice = parseNumberLoose(p.leeggoedPrijs);
+      if (leeggoedPrice <= 0) continue;
+      const stockQty = parseProductStockQty(p.stock, !!p.weegschaal, p.unit).qty;
+      const inAmount = convertQtyByMode(Number(stockQty) || 0, p.unitContent);
+      if (!Number.isFinite(inAmount) || inAmount <= 0) continue;
+
+      const catId = String(p.category?.id || 'uncat');
+      const catLabel = String(p.category?.name || '—').trim() || '—';
+      addToBucket(categoryMap, catId, catLabel, 0, inAmount);
+
+      const prodId = String(p.id || 'product');
+      const prodLabel = String(p.name || '—').trim() || '—';
+      addToBucket(productMap, prodId, prodLabel, 0, inAmount);
+
+      const supplierId = String(p.supplier?.id || 'no-supplier');
+      const supplierLabel = String(p.supplier?.companyName || 'No supplier').trim() || 'No supplier';
+      addToBucket(txMap, supplierId, supplierLabel, 0, inAmount);
+    }
+
+    for (const order of orders) {
+      for (const item of order.items || []) {
+        const product = item.product;
+        if (!product) continue;
+        const leeggoedPrice = parseNumberLoose(product.leeggoedPrijs);
+        if (leeggoedPrice <= 0) continue;
+        const qty = Number(item.quantity) || 0;
+        if (!qty) continue;
+        const baseAmount = convertQtyByMode(qty, product.unitContent);
+        if (!Number.isFinite(baseAmount) || baseAmount === 0) continue;
+        const outDelta = baseAmount > 0 ? baseAmount : 0;
+        const inDelta = baseAmount < 0 ? Math.abs(baseAmount) : 0;
+
+        const catId = String(product.category?.id || 'uncat');
+        const catLabel = String(product.category?.name || '—').trim() || '—';
+        addToBucket(categoryMap, catId, catLabel, outDelta, inDelta);
+
+        const prodId = String(product.id || 'product');
+        const prodLabel = String(product.name || '—').trim() || '—';
+        addToBucket(productMap, prodId, prodLabel, outDelta, inDelta);
+
+        const supplierId = String(product.supplier?.id || 'no-supplier');
+        const supplierLabel = String(product.supplier?.companyName || 'No supplier').trim() || 'No supplier';
+        addToBucket(txMap, supplierId, supplierLabel, outDelta, inDelta);
+      }
+    }
+
+    const sumTotals = (map) => {
+      let out = 0;
+      let inn = 0;
+      for (const v of map.values()) {
+        out += Number(v.out) || 0;
+        inn += Number(v.in) || 0;
+      }
+      out = Math.round(out * 100) / 100;
+      inn = Math.round(inn * 100) / 100;
+      return { out, in: inn, diff: Math.round((inn - out) * 100) / 100 };
+    };
+
+    const rowsFromMap = (map) =>
+      Array.from(map.values())
+        .map((v) => {
+          const out = Math.round((Number(v.out) || 0) * 100) / 100;
+          const inn = Math.round((Number(v.in) || 0) * 100) / 100;
+          return {
+            label: String(v.label || '—'),
+            out,
+            in: inn,
+            diff: Math.round((inn - out) * 100) / 100,
+          };
+        })
+        .sort((a, b) => a.label.localeCompare(b.label));
+
+    return res.json({
+      mode,
+      categories: { totals: sumTotals(categoryMap), rows: rowsFromMap(categoryMap) },
+      products: { totals: sumTotals(productMap), rows: rowsFromMap(productMap) },
+      transactions: { totals: sumTotals(txMap), rows: rowsFromMap(txMap) },
+      periodStart: parsed.start.toISOString(),
+      periodEndExclusive: parsed.endExclusive.toISOString(),
+    });
+  } catch (err) {
+    console.error('GET /api/webpanel/reports/empties', err);
+    return res.status(500).json({ error: err.message || 'Failed to build empties report' });
   }
 });
 
@@ -4047,6 +4283,152 @@ async function listPosUsersForRegisterId(registerId) {
   return reg.userLinks.map((l) => l.user).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+const WORK_TIME_ACTIONS = new Set(['check_in', 'check_out']);
+const USER_WORK_TIME_EVENTS_MAX = 5000;
+const USER_WORK_TIME_EVENTS_KEY_PREFIX = 'user_work_time_events:';
+let userWorkTimeTableReadyPromise = null;
+
+async function ensureUserWorkTimeEventsTable() {
+  if (!userWorkTimeTableReadyPromise) {
+    userWorkTimeTableReadyPromise = (async () => {
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE IF NOT EXISTS "UserWorkTimeEvent" (
+          "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+          "userId" TEXT NOT NULL,
+          "action" TEXT NOT NULL,
+          "at" TEXT NOT NULL,
+          "startAt" TEXT,
+          "endAt" TEXT,
+          "createdAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )`
+      );
+      await prisma.$executeRawUnsafe(
+        `CREATE INDEX IF NOT EXISTS "idx_UserWorkTimeEvent_user_at"
+         ON "UserWorkTimeEvent" ("userId", "at")`
+      );
+    })().catch((err) => {
+      userWorkTimeTableReadyPromise = null;
+      throw err;
+    });
+  }
+  await userWorkTimeTableReadyPromise;
+}
+
+function userWorkTimeEventsKey(userId) {
+  return `${USER_WORK_TIME_EVENTS_KEY_PREFIX}${String(userId || '').trim()}`;
+}
+
+function normalizeUserWorkTimeEvents(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const action = String(item.action || '').trim();
+    const atIso = String(item.at || '').trim();
+    if (!WORK_TIME_ACTIONS.has(action) || !atIso) continue;
+    const atMs = Date.parse(atIso);
+    if (Number.isNaN(atMs)) continue;
+    out.push({ action, at: new Date(atMs).toISOString() });
+  }
+  return out.slice(-USER_WORK_TIME_EVENTS_MAX);
+}
+
+async function loadLegacyUserWorkTimeEvents(userId) {
+  const key = userWorkTimeEventsKey(userId);
+  if (!key || key === USER_WORK_TIME_EVENTS_KEY_PREFIX) return [];
+  const row = await prisma.appSetting.findUnique({ where: { key } });
+  if (!row?.value) return [];
+  try {
+    return normalizeUserWorkTimeEvents(JSON.parse(row.value));
+  } catch {
+    return [];
+  }
+}
+
+async function trimUserWorkTimeEvents(userId) {
+  await prisma.$executeRaw`
+    DELETE FROM "UserWorkTimeEvent"
+    WHERE "userId" = ${String(userId || '').trim()}
+      AND "id" NOT IN (
+        SELECT "id" FROM "UserWorkTimeEvent"
+        WHERE "userId" = ${String(userId || '').trim()}
+        ORDER BY "at" DESC, "id" DESC
+        LIMIT ${USER_WORK_TIME_EVENTS_MAX}
+      )
+  `;
+}
+
+async function loadUserWorkTimeEvents(userId) {
+  const safeUserId = String(userId || '').trim();
+  if (!safeUserId) return [];
+  await ensureUserWorkTimeEventsTable();
+  const rows = await prisma.$queryRaw`
+    SELECT "action", "at"
+    FROM "UserWorkTimeEvent"
+    WHERE "userId" = ${safeUserId}
+    ORDER BY "at" ASC, "id" ASC
+    LIMIT ${USER_WORK_TIME_EVENTS_MAX}
+  `;
+  const normalized = normalizeUserWorkTimeEvents(rows);
+  if (normalized.length > 0) return normalized;
+
+  // Legacy fallback: migrate old AppSetting JSON into table once.
+  const legacy = await loadLegacyUserWorkTimeEvents(safeUserId);
+  if (legacy.length === 0) return [];
+  for (const event of legacy) {
+    const startAt = event.action === 'check_in' ? event.at : null;
+    const endAt = event.action === 'check_out' ? event.at : null;
+    await prisma.$executeRaw`
+      INSERT INTO "UserWorkTimeEvent" ("userId", "action", "at", "startAt", "endAt")
+      VALUES (${safeUserId}, ${event.action}, ${event.at}, ${startAt}, ${endAt})
+    `;
+  }
+  await trimUserWorkTimeEvents(safeUserId);
+  return legacy;
+}
+
+async function saveUserWorkTimeEvent(userId, event) {
+  const safeUserId = String(userId || '').trim();
+  if (!safeUserId) return null;
+  const [safe] = normalizeUserWorkTimeEvents([event]);
+  if (!safe) return null;
+  await ensureUserWorkTimeEventsTable();
+  if (safe.action === 'check_out') {
+    const openRows = await prisma.$queryRaw`
+      SELECT "id"
+      FROM "UserWorkTimeEvent"
+      WHERE "userId" = ${safeUserId}
+        AND "endAt" IS NULL
+        AND ("startAt" IS NOT NULL OR "action" = 'check_in')
+      ORDER BY "startAt" DESC, "id" DESC
+      LIMIT 1
+    `;
+    const openRowId = Array.isArray(openRows) && openRows[0]?.id != null ? Number(openRows[0].id) : null;
+    if (openRowId != null && Number.isFinite(openRowId)) {
+      await prisma.$executeRaw`
+        UPDATE "UserWorkTimeEvent"
+        SET "action" = ${safe.action},
+            "at" = ${safe.at},
+            "startAt" = COALESCE("startAt", "at"),
+            "endAt" = ${safe.at}
+        WHERE "id" = ${openRowId}
+      `;
+    } else {
+      await prisma.$executeRaw`
+        INSERT INTO "UserWorkTimeEvent" ("userId", "action", "at", "startAt", "endAt")
+        VALUES (${safeUserId}, ${safe.action}, ${safe.at}, ${null}, ${safe.at})
+      `;
+    }
+  } else {
+    await prisma.$executeRaw`
+      INSERT INTO "UserWorkTimeEvent" ("userId", "action", "at", "startAt", "endAt")
+      VALUES (${safeUserId}, ${safe.action}, ${safe.at}, ${safe.at}, ${null})
+    `;
+  }
+  await trimUserWorkTimeEvents(safeUserId);
+  return safe;
+}
+
 app.get('/api/users', async (req, res) => {
   try {
     const regId = posTerminalRegisterIdFromBearer(req);
@@ -4068,6 +4450,40 @@ app.get('/api/users/:id', async (req, res) => {
   } catch (err) {
     console.error('GET /api/users/:id', err);
     res.status(500).json({ error: err.message || 'Failed to fetch user details' });
+  }
+});
+
+app.get('/api/users/:id/work-time-status', async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const events = await loadUserWorkTimeEvents(user.id);
+    const last = events.length ? events[events.length - 1] : null;
+    res.json({
+      userId: user.id,
+      lastAction: last?.action || null,
+      lastAt: last?.at || null,
+    });
+  } catch (err) {
+    console.error('GET /api/users/:id/work-time-status', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch user work-time status' });
+  }
+});
+
+app.post('/api/users/:id/work-time-events', async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const action = String(req.body?.action || '').trim();
+    if (!WORK_TIME_ACTIONS.has(action)) {
+      return res.status(400).json({ error: 'Invalid action. Use check_in or check_out.' });
+    }
+    const event = { action, at: new Date().toISOString() };
+    const saved = await saveUserWorkTimeEvent(user.id, event);
+    res.status(201).json({ ok: true, event: saved || event });
+  } catch (err) {
+    console.error('POST /api/users/:id/work-time-events', err);
+    res.status(500).json({ error: err.message || 'Failed to save user work-time event' });
   }
 });
 
