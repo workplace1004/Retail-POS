@@ -1,0 +1,38 @@
+{
+  "name": "pos-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "prisma": {
+    "seed": "node prisma/seed.js"
+  },
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "generate": "prisma generate",
+    "migrate": "prisma db push --skip-generate",
+    "seed": "node prisma/seed.js",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push --skip-generate",
+    "db:seed": "node prisma/seed.js",
+    "db:reset": "prisma db push --force-reset && node prisma/seed.js",
+    "build:win-exe": "node scripts/build-win-exe.cjs",
+    "build:exe": "node scripts/build-win-exe.cjs"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "axios": "^1.13.6",
+    "bytenode": "^1.5.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "prisma": "^5.22.0",
+    "serialport": "^13.0.0",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5"
+  }
+}

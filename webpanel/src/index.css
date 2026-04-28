@@ -1,0 +1,757 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 224 16% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 224 16% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 16% 12%;
+
+    --primary: 221 83% 53%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 217 91% 60%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 224 16% 18%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 220 14% 96%;
+    --accent-foreground: 224 16% 18%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 221 83% 53%;
+
+    --radius: 0.625rem;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 224 16% 18%;
+    --sidebar-primary: 221 83% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 96%;
+    --sidebar-accent-foreground: 224 16% 12%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 221 83% 53%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(221 83% 53%), hsl(217 91% 60%));
+    --gradient-subtle: linear-gradient(180deg, hsl(220 14% 98%), hsl(220 14% 96%));
+    --shadow-sm: 0 1px 2px 0 hsl(224 16% 12% / 0.04);
+    --shadow-md: 0 4px 12px -2px hsl(224 16% 12% / 0.08), 0 2px 4px -2px hsl(224 16% 12% / 0.04);
+    --shadow-lg: 0 12px 32px -8px hsl(224 16% 12% / 0.12), 0 4px 8px -4px hsl(224 16% 12% / 0.06);
+    --shadow-glow: 0 0 0 1px hsl(221 83% 53% / 0.1), 0 4px 16px -4px hsl(221 83% 53% / 0.2);
+  }
+
+  .dark {
+    --background: 224 24% 6%;
+    --foreground: 220 14% 96%;
+
+    --card: 224 22% 9%;
+    --card-foreground: 220 14% 96%;
+
+    --popover: 224 22% 9%;
+    --popover-foreground: 220 14% 96%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 224 24% 6%;
+    --primary-glow: 221 83% 65%;
+
+    --secondary: 224 18% 14%;
+    --secondary-foreground: 220 14% 96%;
+
+    --muted: 224 18% 14%;
+    --muted-foreground: 220 9% 60%;
+
+    --accent: 224 18% 14%;
+    --accent-foreground: 220 14% 96%;
+
+    --success: 142 71% 50%;
+    --success-foreground: 224 24% 6%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 224 24% 6%;
+
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 224 18% 16%;
+    --input: 224 18% 16%;
+    --ring: 217 91% 60%;
+
+    --sidebar-background: 224 26% 5%;
+    --sidebar-foreground: 220 14% 90%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 224 24% 6%;
+    --sidebar-accent: 224 18% 12%;
+    --sidebar-accent-foreground: 220 14% 96%;
+    --sidebar-border: 224 18% 14%;
+    --sidebar-ring: 217 91% 60%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%), hsl(221 83% 65%));
+    --gradient-subtle: linear-gradient(180deg, hsl(224 22% 10%), hsl(224 22% 9%));
+    --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 12px -2px hsl(0 0% 0% / 0.4), 0 2px 4px -2px hsl(0 0% 0% / 0.3);
+    --shadow-lg: 0 12px 32px -8px hsl(0 0% 0% / 0.5), 0 4px 8px -4px hsl(0 0% 0% / 0.4);
+    --shadow-glow: 0 0 0 1px hsl(217 91% 60% / 0.2), 0 4px 24px -4px hsl(217 91% 60% / 0.3);
+  }
+}
+
+/* Best sellers modal: print only #best-report-print-area */
+@media print {
+  html:has(body.print-best-report-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-best-report-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-best-report-only * {
+    visibility: hidden;
+  }
+  body.print-best-report-only #best-report-print-area,
+  body.print-best-report-only #best-report-print-area * {
+    visibility: visible;
+  }
+
+  body.print-best-report-only #best-report-print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 2mm 4mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #000 !important;
+    font-family: Arial, Helvetica, "Liberation Sans", sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    z-index: 9999 !important;
+  }
+
+  body.print-best-report-only [data-best-print-content] {
+    position: static !important;
+    inset: auto !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    display: block !important;
+  }
+
+  body.print-best-report-only [data-best-print-content],
+  body.print-best-report-only [data-best-print-scroll] {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.print-best-report-only [data-best-print-content] > button {
+    display: none !important;
+  }
+
+  body.print-best-report-only #best-report-print-area * {
+    color: #000 !important;
+  }
+
+  body.print-best-report-only #best-report-print-area [data-best-print-skip] {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  ::selection {
+    @apply bg-primary/20 text-foreground;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .bg-gradient-primary { background: var(--gradient-primary); }
+  .bg-gradient-subtle { background: var(--gradient-subtle); }
+  .shadow-card { box-shadow: var(--shadow-md); }
+  .shadow-elevated { box-shadow: var(--shadow-lg); }
+  .shadow-glow { box-shadow: var(--shadow-glow); }
+
+  .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+  /**
+   * Themed scrollbars (matches dark/light via CSS variables).
+   * Targets Tailwind overflow utilities used on scroll containers (e.g. customer modal).
+   */
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-auto {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) hsl(var(--muted) / 0.55);
+  }
+
+  .overflow-y-auto::-webkit-scrollbar,
+  .overflow-x-auto::-webkit-scrollbar,
+  .overflow-auto::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .overflow-y-auto::-webkit-scrollbar-track,
+  .overflow-x-auto::-webkit-scrollbar-track,
+  .overflow-auto::-webkit-scrollbar-track {
+    background: hsl(var(--muted) / 0.55);
+    border-radius: 100px;
+  }
+
+  .overflow-y-auto::-webkit-scrollbar-thumb,
+  .overflow-x-auto::-webkit-scrollbar-thumb,
+  .overflow-auto::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.4);
+    border-radius: 100px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .overflow-y-auto::-webkit-scrollbar-thumb:hover,
+  .overflow-x-auto::-webkit-scrollbar-thumb:hover,
+  .overflow-auto::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.58);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .overflow-y-auto::-webkit-scrollbar-button,
+  .overflow-x-auto::-webkit-scrollbar-button,
+  .overflow-auto::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+/* Suppliers report modal: print only #supplier-report-print-area (no toolbar / chrome). */
+@media print {
+  body.print-supplier-report-only * {
+    visibility: hidden;
+  }
+  body.print-supplier-report-only #supplier-report-print-area,
+  body.print-supplier-report-only #supplier-report-print-area * {
+    visibility: visible;
+  }
+  body.print-supplier-report-only #supplier-report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 1.75rem !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #171717 !important;
+  }
+  /* Force light ink when app UI is dark */
+  body.print-supplier-report-only #supplier-report-print-area * {
+    color: #171717 !important;
+  }
+  body.print-supplier-report-only #supplier-report-print-area .supplier-report-stat-box {
+    background: #fff !important;
+    border: 1px solid #d4d4d4 !important;
+    border-radius: 6px !important;
+  }
+
+  body.print-supplier-report-only [data-supplier-print-content] {
+    position: static !important;
+    inset: auto !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-supplier-report-only [data-supplier-print-scroll] {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-supplier-report-only [data-supplier-print-content] > button {
+    display: none !important;
+  }
+}
+
+/* Stock report modal: print only #stock-report-print-area */
+@media print {
+  body.print-stock-report-only * {
+    visibility: hidden;
+  }
+  body.print-stock-report-only #stock-report-print-area,
+  body.print-stock-report-only #stock-report-print-area * {
+    visibility: visible;
+  }
+  body.print-stock-report-only #stock-report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 2mm 2mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #171717 !important;
+  }
+  body.print-stock-report-only #stock-report-print-area * {
+    color: #171717 !important;
+  }
+
+  body.print-stock-report-only [data-stock-print-content] {
+    position: static !important;
+    inset: auto !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-stock-report-only [data-stock-print-scroll] {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-stock-report-only [data-stock-print-content] > button {
+    display: none !important;
+  }
+
+  body.print-stock-report-only #stock-report-print-area .overflow-x-auto {
+    overflow: visible !important;
+  }
+
+  body.print-stock-report-only #stock-report-print-area table {
+    min-width: 0 !important;
+    width: 100% !important;
+    table-layout: auto !important;
+    font-size: 8.9pt !important;
+  }
+
+  body.print-stock-report-only #stock-report-print-area th,
+  body.print-stock-report-only #stock-report-print-area td {
+    padding-left: 0.3rem !important;
+    padding-right: 0.3rem !important;
+  }
+}
+
+/* Tickets modal: print only #tickets-report-print-area (minimal kassarapport-style sheet) */
+@media print {
+  html:has(body.print-tickets-report-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-tickets-report-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-tickets-report-only * {
+    visibility: hidden;
+  }
+  body.print-tickets-report-only #tickets-report-print-area,
+  body.print-tickets-report-only #tickets-report-print-area * {
+    visibility: visible;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    margin-top: 0 !important;
+    padding: 0 2mm 0 !important;
+    padding-top: 0 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #000 !important;
+    font-family: Arial, Helvetica, "Liberation Sans", sans-serif !important;
+    font-size: 10.5pt !important;
+    line-height: 1.3 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area * {
+    color: #000 !important;
+  }
+
+  body.print-tickets-report-only [data-ticket-print-content] {
+    position: static !important;
+    inset: auto !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-tickets-report-only [data-ticket-print-scroll] {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-tickets-report-only [data-ticket-print-content] > button {
+    display: none !important;
+  }
+
+  /* Strip card / dark UI chrome around the table */
+  body.print-tickets-report-only #tickets-report-print-area > div,
+  body.print-tickets-report-only #tickets-report-print-area > div > div {
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    background-color: #fff !important;
+    overflow: visible !important;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area table {
+    width: 100% !important;
+    max-width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: inherit !important;
+    font-family: inherit !important;
+    background: #fff !important;
+    background-color: #fff !important;
+  }
+
+  /* thead uses bg-background in UI (dark in dark mode) — force paper white for print */
+  body.print-tickets-report-only #tickets-report-print-area thead {
+    border-bottom: 1px solid #b0b0b0 !important;
+    background: #fff !important;
+    background-color: #fff !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area thead tr {
+    border: none !important;
+    background: #fff !important;
+    background-color: #fff !important;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area tbody tr {
+    border: none !important;
+    background: #fff !important;
+    background-color: #fff !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Restore row separators under each ticket block (matches modal; print CSS above strips default tr borders). */
+  body.print-tickets-report-only #tickets-report-print-area tbody tr[data-ticket-print-divider] {
+    border-bottom: 1px solid #a3a3a3 !important;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area th {
+    border: none !important;
+    background: #fff !important;
+    background-color: #fff !important;
+    box-shadow: none !important;
+    height: auto !important;
+    padding: 0 0.65rem 0.35rem 0 !important;
+    font-weight: 600 !important;
+    text-align: left !important;
+    vertical-align: bottom !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area td {
+    border: none !important;
+    background: #fff !important;
+    background-color: #fff !important;
+    box-shadow: none !important;
+    padding: 0.45rem 0.65rem 0.45rem 0 !important;
+    vertical-align: top !important;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area th:last-child,
+  body.print-tickets-report-only #tickets-report-print-area td:last-child {
+    padding-right: 0 !important;
+  }
+
+  body.print-tickets-report-only #tickets-report-print-area [data-ticket-print-skip] {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}
+
+/* Periodic report modal: print only #periodic-report-print-area */
+@media print {
+  html:has(body.print-periodic-report-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-periodic-report-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-periodic-report-only * {
+    visibility: hidden;
+  }
+  body.print-periodic-report-only #periodic-report-print-area,
+  body.print-periodic-report-only #periodic-report-print-area * {
+    visibility: visible;
+  }
+
+  body.print-periodic-report-only #periodic-report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 2mm 4mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #000 !important;
+    font-family: Arial, Helvetica, "Liberation Sans", sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body.print-periodic-report-only #periodic-report-print-area * {
+    color: #000 !important;
+  }
+
+  body.print-periodic-report-only [data-periodic-print-content] {
+    position: static !important;
+    inset: auto !important;
+    left: auto !important;
+    top: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-periodic-report-only [data-periodic-print-scroll] {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  body.print-periodic-report-only [data-periodic-print-content] > button {
+    display: none !important;
+  }
+
+  body.print-periodic-report-only #periodic-report-print-area [data-periodic-print-skip] {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}
+
+/* Labels page: print only #labels-report-print-area */
+@media print {
+  html:has(body.print-labels-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-labels-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.print-labels-only * {
+    visibility: hidden;
+  }
+  body.print-labels-only #labels-report-print-area,
+  body.print-labels-only #labels-report-print-area * {
+    visibility: visible;
+  }
+
+  body.print-labels-only #labels-report-print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    right: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 4mm 6mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #000 !important;
+    font-family: Arial, Helvetica, "Liberation Sans", sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    align-items: start !important;
+    column-gap: 2.5mm !important;
+    row-gap: 3mm !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body.print-labels-only #labels-report-print-area * {
+    color: #000 !important;
+  }
+
+  body.print-labels-only .labels-shelf-card {
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 2mm 2.4mm 2.2mm;
+    text-align: left;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px solid #ccc;
+    box-sizing: border-box;
+  }
+
+  body.print-labels-only .labels-shelf-name {
+    font-size: 9.5pt !important;
+    line-height: 1.25 !important;
+    font-weight: 400 !important;
+    text-transform: lowercase !important;
+    white-space: pre-line !important;
+    margin: 0 0 2mm !important;
+  }
+
+  body.print-labels-only .labels-shelf-price {
+    font-size: 22pt !important;
+    line-height: 1 !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
+    margin: 2mm 0 3mm !important;
+  }
+
+  body.print-labels-only .labels-shelf-barcode-wrap {
+    margin-top: 1mm;
+  }
+
+  body.print-labels-only .labels-shelf-barcode {
+    display: block !important;
+    max-width: 100%;
+    height: auto !important;
+  }
+
+  body.print-labels-only .labels-shelf-barcode text {
+    fill: #000 !important;
+  }
+
+  body.print-labels-only .labels-shelf-barcode-placeholder {
+    font-size: 9pt !important;
+    margin-top: 2mm;
+  }
+}

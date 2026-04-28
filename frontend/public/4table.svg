@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="190" height="227" viewBox="0 0 190 227" fill="none">
+  <defs>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.2" flood-color="#000000" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#soft)">
+    <circle cx="95" cy="63" r="18" fill="#D8DEE6"/>
+    <circle cx="95" cy="145" r="18" fill="#D8DEE6"/>
+    <circle cx="54" cy="104" r="18" fill="#D8DEE6"/>
+    <circle cx="136" cy="104" r="18" fill="#D8DEE6"/>
+  </g>
+
+  <rect x="49" y="58" width="92" height="92" rx="6" fill="#22c55e"/>
+</svg>

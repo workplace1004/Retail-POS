@@ -1,0 +1,362 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./retail.db"
+}
+
+model User {
+  id    String  @id @default(cuid())
+  name  String
+  role  String  // legacy field, currently stored as waiter
+  pin   String
+  orders Order[]
+  posRegisterLinks PosRegisterUser[]
+}
+
+/// LAN POS terminal registered by IP in webpanel; users must be linked to log in from that IP.
+model PosRegister {
+  id          String            @id @default(cuid())
+  name        String            @default("")
+  ipAddress   String            @unique
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  userLinks   PosRegisterUser[]
+  orders      Order[]
+}
+
+model PosRegisterUser {
+  id         String      @id @default(cuid())
+  registerId String
+  userId     String
+  register   PosRegister @relation(fields: [registerId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([registerId, userId])
+}
+
+/// Webpanel sign-in (e-mail + password). Separate from POS `User` (PIN on register).
+model WebpanelUser {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String   @default("")
+  /// Optional JPEG/PNG data URL for header avatar (webpanel profile).
+  avatarDataUrl String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+/// Products queued for label printing (webpanel Labels page; shared store queue).
+model WebpanelLabelQueueItem {
+  id              String   @id @default(cuid())
+  productId       String?
+  product         Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName     String
+  count           Int      @default(1)
+  /// Snapshot at queue time (shelf label print); optional if product was typed manually.
+  priceSnapshot   Float?
+  barcodeSnapshot String?
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PriceGroup {
+  id        String  @id @default(cuid())
+  name      String
+  tax       String? // e.g. standard, reduced, zero
+  sortOrder Int     @default(0)
+}
+
+model Category {
+  id                    String    @id @default(cuid())
+  name                  String
+  sortOrder             Int       @default(0)
+  inWebshop             Boolean   @default(true)
+  displayOnCashRegister Boolean   @default(true)
+  nextCourse            String?
+  products              Product[]
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  number      Int      @default(0)
+  name        String
+  price       Float
+  categoryId  String
+  sortOrder   Int      @default(0)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  orderItems  OrderItem[]
+
+  // General (extra)
+  keyName           String?
+  productionName    String?
+  vatTakeOut        String?
+  barcode           String?
+  printer1          String?
+  printer2          String?
+  printer3          String?
+  addition          String?
+  categoryIdsJson   String?  // JSON array of category ids [id1, id2, ...]
+
+  // Advanced
+  openPrice           Boolean? @default(false)
+  weegschaal          Boolean? @default(false)
+  subproductRequires  Boolean? @default(false)
+  leeggoedPrijs       String?
+  pagerVerplicht      Boolean? @default(false)
+  boldPrint           Boolean? @default(false)
+  groupingReceipt     Boolean? @default(true)
+  labelExtraInfo      String?
+  kassaPhotoPath      String?
+  voorverpakVervaltype String?
+  houdbareDagen       String?
+  bewarenGebruik      String?
+
+  // Extra prices (JSON array of { priceGroupId, priceGroupLabel, otherName, otherPrinter, otherPrice })
+  extraPricesJson     String?
+
+  // Purchase and stock
+  purchaseVat                String?
+  purchasePriceExcl          String?
+  purchasePriceIncl          String?
+  profitPct                  String?
+  unit                       String?
+  unitContent                String?
+  stock                      String?
+  supplierId                 String?
+  supplier                   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  supplierCode               String?
+  stockNotification          Boolean? @default(true)
+  expirationDate             String?
+  declarationExpiryDays      String?
+  notificationSoldOutPieces  String?
+
+  // Webshop
+  inWebshop          Boolean? @default(false)
+  onlineOrderable    Boolean? @default(true)
+  websiteRemark      String?
+  websiteOrder       String?
+  shortWebText       String?
+  websitePhotoPath   String?
+
+  // Kiosk
+  kioskInfo        String?
+  kioskTakeAway     Boolean? @default(true)
+  kioskEatIn        String?
+  kioskSubtitle     String?
+  kioskMinSubs      String?
+  kioskMaxSubs      String?
+  kioskPicturePath  String?
+  labelQueueItems   WebpanelLabelQueueItem[]
+}
+
+model Customer {
+  id                 String   @id @default(cuid())
+  companyName        String?
+  firstName          String?
+  lastName           String?
+  name               String
+  street             String?
+  postalCode         String?
+  city               String?
+  country            String?  @default("BE")
+  phone              String?
+  email              String?
+  discount           String?
+  priceGroup         String?
+  vatNumber          String?
+  loyaltyCardBarcode String?
+  creditTag          String?
+  orders             Order[]
+}
+
+/// Suppliers directory (webpanel Suppliers page).
+model Supplier {
+  id           String    @id @default(cuid())
+  companyName  String
+  vatNumber    String?
+  street       String?
+  postalCode   String?
+  city         String?
+  country      String?   @default("BE")
+  phone        String?
+  email        String?
+  remarks      String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  products     Product[]
+}
+
+model Order {
+  id                    String         @id @default(cuid())
+  /// POS terminal (register) that created the order; from IP match or terminal-bind JWT.
+  posRegisterId         String?
+  posRegister           PosRegister?   @relation(fields: [posRegisterId], references: [id], onDelete: SetNull)
+  customerId            String?
+  customer              Customer?      @relation(fields: [customerId], references: [id])
+  userId                String?        // user who created/processed the order (for In waiting)
+  user                  User?          @relation(fields: [userId], references: [id])
+  status                String         @default("open") // open, in_waiting, in_planning, paid
+  total                 Float          @default(0)
+  /// Kiosk self-order service type marker (kept for compatibility); receipts use product VAT Take out.
+  kioskServiceType      String?
+  source                String         @default("pos") // pos, weborder
+  printed               Boolean        @default(false) // whether In waiting order ticket was printed
+  itemBatchBoundariesJson String?      // JSON array [3, 6, 9] = cumulative item counts per batch
+  itemBatchMetaJson     String?        // JSON array [{userId, userName, createdAt}, ...] per batch
+  items                 OrderItem[]
+  payments              OrderPayment[]
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+}
+
+// Payment breakdown per order – for reports (manual cash, manual card, Cashmatic, Payworld, etc.)
+model OrderPayment {
+  id              String   @id @default(cuid())
+  orderId         String
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  paymentMethodId String
+  paymentMethod   PaymentMethod @relation(fields: [paymentMethodId], references: [id])
+  amount          Float
+  createdAt       DateTime @default(now())
+}
+
+model OrderItem {
+  id                String   @id @default(cuid())
+  orderId           String
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product  @relation(fields: [productId], references: [id])
+  quantity          Int      @default(1)
+  price             Float
+  notes             String?
+  /// JSON: parent + noteIndexes — POS ticket delete marks, shown on KDS
+  ticketStrikeJson  String?
+}
+
+model SubproductGroup {
+  id         String       @id @default(cuid())
+  name       String
+  sortOrder  Int          @default(0)
+  subproducts Subproduct[]
+}
+
+model Subproduct {
+  id         String           @id @default(cuid())
+  name       String
+  groupId    String
+  sortOrder  Int              @default(0)
+  price      Float?           // optional: override price for this subproduct (e.g. Small/Medium/Large)
+  keyName    String?
+  vatTakeOut String?
+  group      SubproductGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+}
+
+// Payment terminals (Cashmatic, Bancontact, etc.) – same as 123
+model PaymentTerminal {
+  id               String   @id @default(cuid())
+  name             String
+  type             String   // cashmatic, bancontact, etc.
+  connectionType   String   // tcp, serial, api
+  connectionString String
+  enabled          Int      @default(1) // 1 = enabled, 0 = disabled
+  isMain           Int      @default(0) // 1 = main terminal
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// POS payment methods (Control → DB; checkout uses active methods)
+model PaymentMethod {
+  id            String         @id @default(cuid())
+  name          String
+  active        Boolean        @default(true)
+  sortOrder     Int            @default(0)
+  integration   String         @default("generic") // manual_cash | cashmatic | payworld | generic
+  orderPayments OrderPayment[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+// Kitchen display stations (KDS); default PIN 1234 on create unless overridden.
+model Kitchen {
+  id              String  @id @default(cuid())
+  name            String
+  pin             String  @default("1234")
+  productIdsJson  String? // JSON string array of product ids for this station
+}
+
+model Discount {
+  id              String   @id @default(cuid())
+  name            String
+  trigger         String?  @default("number")
+  type            String?  @default("amount")
+  value           String?
+  startDate       String?
+  endDate         String?
+  discountOn      String?  @default("products")
+  pieces          String?
+  combinable      Boolean? @default(false)
+  targetIdsJson   String? // JSON array of product or category ids (Control → discount targets)
+}
+
+// Preset texts for production tickets (Control → Production messages)
+model ProductionMessage {
+  id        String @id @default(cuid())
+  text      String
+  sortOrder Int    @default(0)
+}
+
+// Label sizes / margins (Control → Printer → Labels)
+model PrinterLabel {
+  id           String  @id @default(cuid())
+  name         String
+  sizeLabel    String?
+  height       String?
+  width        String?
+  standard     Boolean @default(false)
+  marginLeft   Int     @default(0)
+  marginRight  Int     @default(0)
+  marginBottom Int     @default(0)
+  marginTop    Int     @default(0)
+  sortOrder    Int     @default(0)
+}
+
+// App settings (e.g. language)
+model AppSetting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+}
+
+// Receipt/kitchen printers – same as 123
+model Printer {
+  id               String   @id @default(cuid())
+  name             String
+  type             String   // serial, windows
+  connectionString String?
+  baudRate         Int?
+  dataBits         Int?
+  parity           String?
+  stopBits         Int?
+  isMain           Int      @default(0) // 1 = main printer
+  enabled          Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+/// Archived end-of-period (Z) financial close; X reports are not stored.
+model ZReport {
+  id             String   @id @default(cuid())
+  zNumber        Int      @unique
+  periodStart    DateTime
+  periodEnd      DateTime
+  summaryJson    String
+  closedByUserId String?
+  closedByName   String?
+  scope          String   @default("store")
+  createdAt      DateTime @default(now())
+}

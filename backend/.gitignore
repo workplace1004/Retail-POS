@@ -1,0 +1,5 @@
+release/
+build/installer.ico
+electron-tray-launcher/main.cjs
+electron-tray-launcher/tray-icon.png
+node_modules/

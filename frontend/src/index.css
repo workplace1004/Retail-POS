@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optimized for 1024×768 resolution */
+@layer base {
+  * {
+    @apply box-border;
+  }
+  html {
+    font-size: 15px;
+  }
+  body {
+    @apply m-0 font-sans bg-pos-bg text-pos-text overflow-hidden;
+    width: 100vw;
+    min-width: 1024px;
+    max-width: 1024px;
+    min-height: 768px;
+    max-height: 768px;
+    height: 100vh;
+  }
+  #root {
+    @apply h-full w-full;
+    min-width: 1024px;
+    max-width: 1024px;
+    min-height: 768px;
+    max-height: 768px;
+  }
+  button {
+    @apply cursor-pointer;
+    font-family: inherit;
+  }
+  input, select, textarea {
+    font-family: inherit;
+  }
+  input, textarea {
+    caret-color: #22c55e;
+  }
+  input:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+}
+
+/* Hide scrollbar while keeping scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
