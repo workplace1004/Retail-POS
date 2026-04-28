@@ -38,7 +38,7 @@ export function buildFinancialReportPrintLines(kind, tr) {
   };
 
   return [
-    'pospoint demo',
+    'Retail POS',
     'BE.0.0.0',
     `Date : ${dateStr}  Tijd: ${timeStr}`,
     title,

@@ -19,7 +19,7 @@ export function buildUserReportPrintLines(kind, tr) {
   if (kind === 'z') {
     const title = tr('control.reports.userZReportTitle', 'Z USER REPORT #1');
     return [
-      'pospoint demo',
+      'Retail POS',
       'BE.0.0.0',
       `Date : ${dateStr}  Tijd: ${timeStr}`,
       title,
@@ -41,7 +41,7 @@ export function buildUserReportPrintLines(kind, tr) {
 
   const title = tr('control.reports.userXReportTitle', 'X USER REPORT #3');
   return [
-    'pospoint demo',
+    'Retail POS',
     'BE.0.0.0',
     `Date : ${dateStr}  Tijd: ${timeStr}`,
     title,

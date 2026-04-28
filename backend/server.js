@@ -16,6 +16,7 @@ import { createVivaService } from './services/vivaService.js';
 import { buildPeriodicReportReceiptLines } from './periodicReportReceipt.js';
 import { buildPeriodicReportWebSections } from './periodicReportWebSections.js';
 import { buildFinancialReportReceiptLines } from './financialReportReceipt.js';
+import { buildUserReportReceiptLines } from './userReportReceipt.js';
 import {
   signWebpanelJwt,
   verifyWebpanelJwt,
@@ -4365,7 +4366,7 @@ app.post('/api/webpanel/reports/z-preview', async (req, res) => {
     };
 
     const lines = [];
-    lines.push('pospoint demo');
+    lines.push('Retail POS');
     lines.push('BE1234567890');
     lines.push('pospoint');
     lines.push('pospoint');
@@ -4754,6 +4755,62 @@ app.get('/api/reports/periodic', async (req, res) => {
   } catch (err) {
     console.error('GET /api/reports/periodic', err);
     res.status(500).json({ error: err.message || 'Failed to generate report' });
+  }
+});
+
+/** User report (X/Z style): per-user ticket/turnover + optional sections from report settings. */
+app.get('/api/reports/user', async (req, res) => {
+  try {
+    const kindRaw = String(req.query.kind || 'x').trim().toLowerCase();
+    const kind = kindRaw === 'z' ? 'z' : 'x';
+    const periodStart = await getFinancialReportingPeriodStart();
+    const periodEnd = new Date();
+    const requestedRegisterId = sanitizeReportQueryParam(req.query.registerId, 64) || null;
+    const requestedRegisterName = sanitizeReportQueryParam(req.query.registerName, 120) || null;
+    const activeRegister = await resolvePosRegisterForRequest(req, prisma, {
+      registerId: requestedRegisterId,
+      registerName: requestedRegisterName,
+    });
+    const activeRegisterId = activeRegister?.id || null;
+    const orders = await loadPaidOrdersForFinancialPeriod(prisma, periodStart, periodEnd, activeRegisterId);
+    const lang = sanitizeReportQueryParam(req.query.lang, 8) || 'en';
+    const userName = sanitizeReportQueryParam(req.query.userName, 120);
+    const storeName = sanitizeReportQueryParam(req.query.storeName, 120);
+    let reportSettings = null;
+    try {
+      const raw = String(req.query.reportSettings || '').trim();
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) reportSettings = parsed;
+      }
+    } catch {
+      reportSettings = null;
+    }
+    const { lines } = buildUserReportReceiptLines({
+      orders,
+      kind,
+      periodStart,
+      periodEnd,
+      printedAt: new Date(),
+      lang,
+      userName,
+      storeName,
+      reportSettings,
+    });
+    res.json({
+      lines,
+      summary: {
+        kind,
+        orderCount: orders.length,
+        periodStart: periodStart.toISOString(),
+        periodEnd: periodEnd.toISOString(),
+        registerId: activeRegisterId,
+        registerName: String(activeRegister?.name || activeRegister?.ipAddress || '').trim() || null,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/reports/user', err);
+    res.status(500).json({ error: err.message || 'Failed to generate user report' });
   }
 });
 

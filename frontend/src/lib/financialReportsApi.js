@@ -81,3 +81,21 @@ export async function fetchZReportReceiptLines(id) {
   if (!res.ok) throw new Error(data?.error || 'Failed to load Z receipt');
   return data;
 }
+
+export async function fetchUserReport({ kind = 'x', lang, userName, storeName, reportSettings, registerId, registerName } = {}) {
+  const res = await fetch(
+    `${POS_API_PREFIX}/reports/user${buildQuery({
+      kind,
+      lang,
+      userName,
+      storeName,
+      registerId,
+      registerName,
+      reportSettings: reportSettings ? JSON.stringify(reportSettings) : '',
+    })}`,
+    { cache: 'no-store', headers: { ...posTerminalAuthHeaders() } },
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'Failed to build user report');
+  return data;
+}

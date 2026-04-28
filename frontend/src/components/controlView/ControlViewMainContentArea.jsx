@@ -14,10 +14,10 @@ import {
   closeFinancialZReport,
   fetchFinancialPeriod,
   fetchFinancialXReport,
+  fetchUserReport,
   fetchZReportHistory,
   fetchZReportReceiptLines,
 } from '../../lib/financialReportsApi.js';
-import { buildUserReportPrintLines } from '../../lib/userReportPrintLines.js';
 import { printPeriodicReportLines, splitPeriodicReportBodyIntoChunks } from '../../lib/periodicReportDisplay.js';
 import { POS_API_PREFIX as API } from '../../lib/apiOrigin.js';
 import { ReportPrintErrorModal } from './ReportPrintErrorModal.jsx';
@@ -400,6 +400,8 @@ export function ControlViewMainContentArea({ ctx }) {
   const [financialLive, setFinancialLive] = useState(null);
   const [financialPeriod, setFinancialPeriod] = useState(null);
   const [zHistoryList, setZHistoryList] = useState([]);
+  const [userReportLines, setUserReportLines] = useState([]);
+  const [userReportLoading, setUserReportLoading] = useState(false);
   const [financialLoadError, setFinancialLoadError] = useState(null);
   const [financialRefreshing, setFinancialRefreshing] = useState(false);
   const [showZCloseConfirm, setShowZCloseConfirm] = useState(false);
@@ -489,6 +491,33 @@ export function ControlViewMainContentArea({ ctx }) {
       realtimeSocket.off('z-reports:changed', handleZReportsChanged);
     };
   }, [realtimeSocket, controlSidebarId, reportTabId, financialReportKind, loadFinancialLive]);
+
+  const loadUserReportLive = useCallback(async () => {
+    setUserReportLoading(true);
+    setFinancialLoadError(null);
+    try {
+      const data = await fetchUserReport({
+        kind: userReportKind,
+        lang: appLanguage,
+        userName: reportUserName,
+        storeName: '',
+        registerId: String(currentRegisterId || '').trim() || null,
+        registerName: String(currentRegisterName || '').trim() || null,
+        reportSettings,
+      });
+      setUserReportLines(Array.isArray(data?.lines) ? data.lines : []);
+    } catch (e) {
+      setUserReportLines([]);
+      setFinancialLoadError(e?.message || 'Failed to load user report');
+    } finally {
+      setUserReportLoading(false);
+    }
+  }, [appLanguage, currentRegisterId, currentRegisterName, reportSettings, reportUserName, userReportKind]);
+
+  useEffect(() => {
+    if (controlSidebarId !== 'reports' || reportTabId !== 'user') return;
+    void loadUserReportLive();
+  }, [controlSidebarId, reportTabId, loadUserReportLive]);
 
   const confirmZCloseAndPrint = useCallback(async () => {
     setShowZCloseConfirm(false);
@@ -1340,72 +1369,12 @@ export function ControlViewMainContentArea({ ctx }) {
                             {financialRefreshing && !financialLive ? (
                               <p className="text-center text-gray-500 py-8">{tr('loading', 'Loading...')}</p>
                             ) : null}
-                            {financialLive?.summary ? (
-                              <div className="text-left space-y-2 text-black">
-                                <div className="text-base font-medium mb-2 text-center">POS</div>
-                                <div className="border-b border-dotted border-gray-400 pb-2 mb-2 font-semibold text-sm text-center">
-                                  {financialReportKind === 'z' && financialPeriod?.nextZNumber != null
-                                    ? `Z FINANCIEEL #${financialPeriod.nextZNumber}`
-                                    : 'X FINANCIEEL (interim)'}
-                                </div>
-                                <div className="text-xs text-gray-600 space-y-1">
-                                  <div>
-                                    {tr('control.reports.openPeriodFrom', 'Open period from')}:{' '}
-                                    {new Date(financialLive.summary.periodStart).toLocaleString()}
-                                  </div>
-                                  <div>
-                                    {tr('control.reports.snapshotTo', 'Snapshot to')}:{' '}
-                                    {new Date(financialLive.summary.periodEnd).toLocaleString()}
-                                  </div>
-                                </div>
-                                <div className="mt-3 font-medium">
-                                  {tr('control.reports.paidOrdersCount', 'Paid orders')}: {financialLive.summary.orderCount}
-                                </div>
-                                <div className="font-medium text-rose-600">
-                                  {tr('control.reports.grossSales', 'Gross sales')}: €
-                                  {Number(financialLive.summary.grossTotal || 0).toFixed(2)}
-                                </div>
-                                <div className="text-sm">
-                                  {tr('control.reports.vatTotal', 'VAT total')}: €
-                                  {Number(financialLive.summary.vatTotal || 0).toFixed(2)}
-                                </div>
-                                <div className="mt-3 font-medium">{tr('control.reports.vatGroups', 'VAT groups')}</div>
-                                <ul className="text-sm space-y-1 pl-2">
-                                  {Array.isArray(financialLive.summary.vatGroups) &&
-                                    financialLive.summary.vatGroups.length > 0 ? (
-                                    financialLive.summary.vatGroups.map((g) => (
-                                      <li key={g.rateLabel}>
-                                        {g.rateLabel}: NS €{Number(g.mvhNs || 0).toFixed(2)} | NR €
-                                        {Number(g.mvhNr || 0).toFixed(2)} | VAT €
-                                        {Number(g.vatTotal || 0).toFixed(2)} | {tr('total', 'Total')} €
-                                        {Number(g.grossTotal || 0).toFixed(2)}
-                                      </li>
-                                    ))
-                                  ) : (
-                                    <li>{tr('control.reports.noVatGroups', 'No VAT groups')}</li>
-                                  )}
-                                </ul>
-                                <div className="mt-3 font-medium">{tr('control.reports.payments', 'Payments')}</div>
-                                <ul className="text-sm space-y-1 pl-2">
-                                  {Object.entries(financialLive.summary.paymentTotals || {}).map(([name, amt]) => (
-                                    <li key={name}>
-                                      {name}: €{Number(amt).toFixed(2)}
-                                    </li>
-                                  ))}
-                                </ul>
-                                <div className="mt-2 font-medium">
-                                  {tr('total', 'Total')}: €{Number(financialLive.summary.paymentTotal || 0).toFixed(2)}
-                                </div>
-                                <div className="mt-3 font-medium">{tr('control.reports.eatInTakeOutShort', 'Take-out')}</div>
-                                <div className="text-sm pl-2">
-                                  NS ({tr('control.reports.eatIn', 'Eat-in')}): €
-                                  {Number(financialLive.summary.eatInTotal || 0).toFixed(2)} ({financialLive.summary.eatInCount})
-                                </div>
-                                <div className="text-sm pl-2">
-                                  NR ({tr('control.reports.takeOut', 'Take-out')}): €
-                                  {Number(financialLive.summary.takeTotal || 0).toFixed(2)} ({financialLive.summary.takeCount})
-                                </div>
-                                <p className="text-xs text-gray-500 mt-4 text-center">
+                            {Array.isArray(financialLive?.lines) && financialLive.lines.length > 0 ? (
+                              <div className="text-left space-y-1 text-black text-sm font-mono whitespace-pre-wrap">
+                                {financialLive.lines.map((line, idx) => (
+                                  <div key={`financial-live-line-${idx}`}>{line}</div>
+                                ))}
+                                <p className="text-xs text-gray-500 mt-4 text-center font-sans">
                                   {financialReportKind === 'z'
                                     ? tr(
                                       'control.reports.zPreviewFooter',
@@ -1503,6 +1472,7 @@ export function ControlViewMainContentArea({ ctx }) {
                                 lang: appLanguage,
                                 userName: reportUserName,
                                 storeName: '',
+                                reportSettings,
                               });
                               setFinancialLive(data);
                               setFinancialPeriod(await fetchFinancialPeriod().catch(() => null));
@@ -1566,7 +1536,7 @@ export function ControlViewMainContentArea({ ctx }) {
                       className="flex-1 overflow-auto rounded-xl border border-pos-border bg-white text-gray-800 p-4 min-h-[400px]"
                     >
                       <div className="text-sm font-mono space-y-1 whitespace-pre-wrap text-center">
-                        <div className="text-base font-medium mb-2">pospoint demo</div>
+                        <div className="text-base font-medium mb-2">Retail POS</div>
                         <div className="mb-2">BE.0.0.0</div>
                         <div className="flex justify-between border-b border-dotted border-gray-400 pb-1 mb-2 text-xs">
                           <span>Date : {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-')}</span>
@@ -1578,50 +1548,13 @@ export function ControlViewMainContentArea({ ctx }) {
                             : tr('control.reports.userXReportTitle', 'X USER REPORT #3')}
                         </div>
                         <div className="text-left space-y-2 text-xs sm:text-sm">
-                          <div className="font-medium">{tr('control.reports.userReportPerUser', 'Per user')}</div>
-                          <table className="w-full border-collapse text-left">
-                            <thead>
-                              <tr className="border-b border-gray-300">
-                                <th className="py-1 pr-2">{tr('control.reports.userColumnUser', 'User')}</th>
-                                <th className="py-1 pr-2">{tr('control.reports.userColumnTickets', 'Tickets')}</th>
-                                <th className="py-1">{tr('control.reports.userColumnAmount', 'Amount')}</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {userReportKind === 'z' ? (
-                                <>
-                                  <tr className="border-b border-gray-200"><td className="py-1">Kiosk</td><td className="py-1">124</td><td className="py-1">2840.65</td></tr>
-                                  <tr className="border-b border-gray-200"><td className="py-1">Admin</td><td className="py-1">38</td><td className="py-1">912.40</td></tr>
-                                  <tr className="border-b border-gray-200"><td className="py-1">Waiter 2</td><td className="py-1">22</td><td className="py-1">416.20</td></tr>
-                                </>
-                              ) : (
-                                <>
-                                  <tr className="border-b border-gray-200"><td className="py-1">Kiosk</td><td className="py-1">42</td><td className="py-1">986.30</td></tr>
-                                  <tr className="border-b border-gray-200"><td className="py-1">Admin</td><td className="py-1">15</td><td className="py-1">298.10</td></tr>
-                                  <tr className="border-b border-gray-200"><td className="py-1">Waiter 2</td><td className="py-1">8</td><td className="py-1">142.85</td></tr>
-                                </>
-                              )}
-                            </tbody>
-                          </table>
-                          <div className="font-medium pt-2">
-                            {userReportKind === 'z' ? (
-                              <>
-                                <div>{tr('total', 'Total')} {tr('control.reports.userColumnTickets', 'Tickets')}: 184</div>
-                                <div>{tr('total', 'Total')} {tr('control.reports.userColumnAmount', 'Amount')}: 4169.25</div>
-                                <div className="mt-2 text-gray-700">{tr('control.reports.userReportDiscountsZ', 'Discounts applied (Z): 12')}</div>
-                                <div className="text-gray-700">{tr('control.reports.userReportVoidsZ', 'Void lines (Z): 3')}</div>
-                                <div className="mt-2">Database ID: 1</div>
-                              </>
-                            ) : (
-                              <>
-                                <div>{tr('total', 'Total')} {tr('control.reports.userColumnTickets', 'Tickets')}: 65</div>
-                                <div>{tr('total', 'Total')} {tr('control.reports.userColumnAmount', 'Amount')}: 1427.25</div>
-                                <div className="mt-2 text-gray-700">{tr('control.reports.userReportDiscountsX', 'Discounts applied (X): 4')}</div>
-                                <div className="text-gray-700">{tr('control.reports.userReportVoidsX', 'Void lines (X): 1')}</div>
-                                <div className="mt-2">Database ID: 3</div>
-                              </>
-                            )}
-                          </div>
+                          {userReportLoading ? (
+                            <div className="text-sm text-gray-500">{tr('loading', 'Loading...')}</div>
+                          ) : (
+                            userReportLines.map((line, idx) => (
+                              <div key={`user-report-line-${idx}`}>{line}</div>
+                            ))
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1652,7 +1585,20 @@ export function ControlViewMainContentArea({ ctx }) {
                         if (reportPrintBusy != null) return;
                         setReportPrintBusy('user');
                         try {
-                          const lines = buildUserReportPrintLines(userReportKind, tr);
+                          let lines = userReportLines;
+                          if (!Array.isArray(lines) || lines.length === 0) {
+                            const data = await fetchUserReport({
+                              kind: userReportKind,
+                              lang: appLanguage,
+                              userName: reportUserName,
+                              storeName: '',
+                              registerId: String(currentRegisterId || '').trim() || null,
+                              registerName: String(currentRegisterName || '').trim() || null,
+                              reportSettings,
+                            });
+                            lines = Array.isArray(data?.lines) ? data.lines : [];
+                            setUserReportLines(lines);
+                          }
                           await printPeriodicReportLines(lines);
                         } catch (e) {
                           setReportPrintErrorMessage(

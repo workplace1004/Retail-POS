@@ -74,6 +74,10 @@ function fmtPrintedAt(d) {
   return `${dd}-${mm}-${yyyy} ${h}:${m}`;
 }
 
+function fmtHour(h) {
+  return `${String(Math.max(0, Math.min(23, Number(h) || 0))).padStart(2, '0')}:00`;
+}
+
 const GIFT_RE = /gift|kadobon|voucher|cadeau|kadobonn|hediye/i;
 
 /**
@@ -113,7 +117,7 @@ export function buildFinancialReportReceiptLines(opts) {
     return value !== false;
   };
 
-  const title = storeName.trim() || 'POS';
+  const title = storeName.trim() || 'Retail POS';
   lines.push(center(title));
   const reportTitle =
     kind === 'z' && zNumber != null && Number.isFinite(Number(zNumber))
@@ -277,6 +281,93 @@ export function buildFinancialReportReceiptLines(opts) {
     lines.push(lineLR(L.staffUse, fmtMoney(0)));
     lines.push(lineLR(L.onlineRefundCash, fmtMoney(0)));
     lines.push(lineLR(L.onlineOrders, fmtMoney(webTurnover)));
+  }
+
+  if (sectionEnabled('category-totals')) {
+    const categoryMap = new Map();
+    for (const o of orders) {
+      for (const it of o.items || []) {
+        const qty = Number(it.quantity) || 0;
+        const amount = (Number(it.price) || 0) * qty;
+        const label = String(it.product?.category?.name || '—').trim() || '—';
+        const row = categoryMap.get(label) || { qty: 0, amount: 0 };
+        row.qty += qty;
+        row.amount += amount;
+        categoryMap.set(label, row);
+      }
+    }
+    const rows = [...categoryMap.entries()].sort((a, b) => b[1].amount - a[1].amount);
+    lines.push(dashLine());
+    lines.push(center(L.categoryTotals));
+    lines.push(dashLine());
+    for (const [label, row] of rows) {
+      lines.push(`${padL(fmtInt(row.qty), 3)} ${padR(label, 28)} ${padL(fmtMoney(row.amount), 8)}`.slice(0, WIDTH));
+    }
+  }
+
+  if (sectionEnabled('product-totals')) {
+    const productMap = new Map();
+    for (const o of orders) {
+      for (const it of o.items || []) {
+        const qty = Number(it.quantity) || 0;
+        const amount = (Number(it.price) || 0) * qty;
+        const label = String(it.product?.name || '—').trim() || '—';
+        const row = productMap.get(label) || { qty: 0, amount: 0 };
+        row.qty += qty;
+        row.amount += amount;
+        productMap.set(label, row);
+      }
+    }
+    const rows = [...productMap.entries()].sort((a, b) => b[1].amount - a[1].amount);
+    lines.push(dashLine());
+    lines.push(center(L.productTotals));
+    lines.push(dashLine());
+    for (const [label, row] of rows) {
+      lines.push(`${padL(fmtInt(row.qty), 3)} ${padR(label, 28)} ${padL(fmtMoney(row.amount), 8)}`.slice(0, WIDTH));
+    }
+  }
+
+  if (sectionEnabled('hour-totals')) {
+    const hourMap = new Map();
+    for (const o of orders) {
+      const hour = new Date(o.updatedAt).getHours();
+      const row = hourMap.get(hour) || { orders: 0, amount: 0 };
+      row.orders += 1;
+      row.amount += Number(o.total) || 0;
+      hourMap.set(hour, row);
+    }
+    lines.push(dashLine());
+    lines.push(center(L.hourTotals));
+    lines.push(dashLine());
+    lines.push(`${padR(L.hour, 8)}${padL(L.orders, 10)}${padL(L.amount, 16)}`.slice(0, WIDTH));
+    for (const [hour, row] of [...hourMap.entries()].sort((a, b) => a[0] - b[0])) {
+      lines.push(`${padR(fmtHour(hour), 8)}${padL(fmtInt(row.orders), 10)}${padL(fmtMoney(row.amount), 16)}`.slice(0, WIDTH));
+    }
+  }
+
+  if (sectionEnabled('hour-totals-per-user')) {
+    const userHourMap = new Map();
+    for (const o of orders) {
+      const userLabel = String(o.user?.name || o.userId || '—').trim() || '—';
+      const hour = new Date(o.updatedAt).getHours();
+      const byHour = userHourMap.get(userLabel) || new Map();
+      const row = byHour.get(hour) || { orders: 0, amount: 0 };
+      row.orders += 1;
+      row.amount += Number(o.total) || 0;
+      byHour.set(hour, row);
+      userHourMap.set(userLabel, byHour);
+    }
+    lines.push(dashLine());
+    lines.push(center(L.hourTotalsPerUser));
+    lines.push(dashLine());
+    for (const [userLabel, byHour] of [...userHourMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      lines.push(userLabel.slice(0, WIDTH));
+      lines.push(`${padR(L.hour, 8)}${padL(L.orders, 10)}${padL(L.amount, 16)}`.slice(0, WIDTH));
+      for (const [hour, row] of [...byHour.entries()].sort((a, b) => a[0] - b[0])) {
+        lines.push(`${padR(fmtHour(hour), 8)}${padL(fmtInt(row.orders), 10)}${padL(fmtMoney(row.amount), 16)}`.slice(0, WIDTH));
+      }
+      lines.push(dashLine());
+    }
   }
 
   if (kind === 'x') {
