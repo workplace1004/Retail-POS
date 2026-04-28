@@ -18,9 +18,10 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/api";
+import { getRealtimeSocket } from "@/lib/realtime";
 import { toast } from "@/hooks/use-toast";
 
-type ApiUser = { id: string; name: string; label: string; role: string };
+type ApiUser = { id: string; name: string; label: string; role: string; registerNames?: string[] };
 type WebpanelListUser = { id: string; email: string; name: string; createdAt: string };
 type PosRole = "admin" | "waiter";
 
@@ -145,6 +146,22 @@ const Users = () => {
   useEffect(() => {
     if (tab === "web") void loadWebUsers();
   }, [tab, loadWebUsers]);
+
+  useEffect(() => {
+    const socket = getRealtimeSocket();
+    const handlePosUsersChanged = () => {
+      if (tab === "pos") void loadPosUsers();
+    };
+    const handleWebUsersChanged = () => {
+      if (tab === "web") void loadWebUsers();
+    };
+    socket.on("pos-users:changed", handlePosUsersChanged);
+    socket.on("webpanel-users:changed", handleWebUsersChanged);
+    return () => {
+      socket.off("pos-users:changed", handlePosUsersChanged);
+      socket.off("webpanel-users:changed", handleWebUsersChanged);
+    };
+  }, [tab, loadPosUsers, loadWebUsers]);
 
   const pagedPosUsers = useMemo(() => {
     const start = (posPage - 1) * posPageSize;
@@ -402,6 +419,11 @@ const Users = () => {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-foreground truncate">{u.name}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {Array.isArray(u.registerNames) && u.registerNames.length > 0
+                            ? u.registerNames.join(", ")
+                            : "No register assigned"}
+                        </div>
                       </div>
                       <Badge variant={u.role === "admin" ? "default" : "secondary"} className="font-normal absolute left-1/2 -translate-x-1/2 shrink-0">
                         {roleLabel(u.role)}

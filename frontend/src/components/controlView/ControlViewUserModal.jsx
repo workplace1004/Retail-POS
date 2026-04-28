@@ -108,7 +108,7 @@ export function ControlViewUserModal({
                   <input
                     type="text"
                     value={userPin}
-                    onChange={(e) => setUserPin(e.target.value)}
+                    onChange={(e) => setUserPin(String(e.target.value || '').replace(/\D/g, '').slice(0, 4))}
                     onFocus={() => setUserModalActiveField('pincode')}
                     placeholder=""
                     className="px-4 py-3 rounded-lg max-w-[150px] bg-pos-panel border border-pos-border text-pos-text placeholder-pos-muted focus:outline-none focus:border-green-500 text-sm"

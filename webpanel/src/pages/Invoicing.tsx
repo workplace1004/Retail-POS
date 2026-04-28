@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { FileText, Plus, FileBarChart, Users as UsersIcon, Settings, ChevronRight, Pencil, Trash2, Save, Bold, Italic, Underline, Strikethrough, Link as LinkIcon, Image as ImageIcon, Video, List, Quote, Minus, Undo2, Redo2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FileText, Plus, FileBarChart, Users as UsersIcon, Settings, ChevronRight, Pencil, Trash2, Save, Video } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { PageHeader } from "@/components/PageHeader";
 import { TabsBar } from "@/components/TabsBar";
@@ -12,22 +12,58 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useLanguage } from "@/contexts/LanguageContext";
 import { TranslationKey } from "@/lib/translations";
 import { cn } from "@/lib/utils";
+import { apiRequest } from "@/lib/api";
+import { toast } from "@/hooks/use-toast";
 import { NewDocumentDialog } from "@/components/invoicing/NewDocumentDialog";
 import { DataPagination } from "@/components/DataPagination";
+
+type InvoicingDocumentLayoutOptions = {
+  firstInvoiceNr: number;
+  firstQuotationNr: number;
+  firstCreditNoteNr: number;
+  firstDeliveryNoteNr: number;
+  companyInfoLines: string[];
+  footerText: string;
+  logoDataUrl: string;
+  companyNameSize: "hidden" | "small" | "standard" | "large";
+  showTotalIncl: boolean;
+  showPriceIncl: boolean;
+  showPriceExcl: boolean;
+  showTotalExcl: boolean;
+  showVatPercent: boolean;
+};
+
+const DEFAULT_DOCUMENT_LAYOUT_OPTIONS: InvoicingDocumentLayoutOptions = {
+  firstInvoiceNr: 1,
+  firstQuotationNr: 1,
+  firstCreditNoteNr: 1,
+  firstDeliveryNoteNr: 0,
+  companyInfoLines: ["", "", "", "", "", ""],
+  footerText: "",
+  logoDataUrl: "",
+  companyNameSize: "standard",
+  showTotalIncl: false,
+  showPriceIncl: true,
+  showPriceExcl: true,
+  showTotalExcl: false,
+  showVatPercent: false,
+};
 
 const Invoicing = () => {
   const { t } = useLanguage();
   const [tab, setTab] = useState("docs");
   const [perTab, setPerTab] = useState<"all" | "open">("open");
-  const [settingsTab, setSettingsTab] = useState<"layouts" | "doc" | "general" | "signature" | "email">("layouts");
-  const [activeLayout, setActiveLayout] = useState<"standard" | "1">("standard");
-  const [layouts, setLayouts] = useState<string[]>(["Standaard", "1"]);
+  const [settingsTab, setSettingsTab] = useState<"layouts" | "doc" | "general">("layouts");
+  const [activeLayout, setActiveLayout] = useState("");
+  const [layouts, setLayouts] = useState<string[]>([]);
   const [newLayout, setNewLayout] = useState("");
   const [newDocOpen, setNewDocOpen] = useState(false);
   const [docsPage, setDocsPage] = useState(1);
   const [docsPageSize, setDocsPageSize] = useState(10);
   const [perPage, setPerPage] = useState(1);
   const [perPageSize, setPerPageSize] = useState(10);
+  const [docLayoutOptions, setDocLayoutOptions] = useState<InvoicingDocumentLayoutOptions>(DEFAULT_DOCUMENT_LAYOUT_OPTIONS);
+  const [docLayoutSaving, setDocLayoutSaving] = useState(false);
 
   const tabs = [
     { id: "docs", label: t("salesDocuments"), icon: <FileBarChart className="h-4 w-4" /> },
@@ -78,27 +114,137 @@ const Invoicing = () => {
     { id: "layouts", label: "manageLayouts" },
     { id: "doc", label: "documentLayout" },
     { id: "general", label: "generalSettingsInv" },
-    { id: "signature", label: "attachmentSignature" },
-    { id: "email", label: "emailSettings" },
   ];
 
-  const addLayout = () => {
+  const saveLayouts = useCallback(async (nextLayouts: string[]) => {
+    await apiRequest<{ value: string[] }>("/api/settings/invoicing-layouts", {
+      method: "PUT",
+      body: JSON.stringify({ value: nextLayouts }),
+    });
+  }, []);
+
+  const loadLayouts = useCallback(async () => {
+    try {
+      const response = await apiRequest<{ value: string[] }>("/api/settings/invoicing-layouts");
+      const values = Array.isArray(response?.value) ? response.value : [];
+      setLayouts(values);
+      setActiveLayout((prev) => (prev && values.includes(prev) ? prev : (values[0] ?? "")));
+    } catch {
+      setLayouts([]);
+      setActiveLayout("");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadLayouts();
+  }, [loadLayouts]);
+
+  const loadDocumentLayoutOptions = useCallback(async (layoutName: string) => {
+    if (!layoutName) {
+      setDocLayoutOptions(DEFAULT_DOCUMENT_LAYOUT_OPTIONS);
+      return;
+    }
+    try {
+      const response = await apiRequest<{ value: InvoicingDocumentLayoutOptions }>(
+        `/api/settings/invoicing-document-layout/${encodeURIComponent(layoutName)}`
+      );
+      const value = response?.value;
+      if (!value) {
+        setDocLayoutOptions(DEFAULT_DOCUMENT_LAYOUT_OPTIONS);
+        return;
+      }
+      setDocLayoutOptions({
+        firstInvoiceNr: Number(value.firstInvoiceNr) || 0,
+        firstQuotationNr: Number(value.firstQuotationNr) || 0,
+        firstCreditNoteNr: Number(value.firstCreditNoteNr) || 0,
+        firstDeliveryNoteNr: Number(value.firstDeliveryNoteNr) || 0,
+        companyInfoLines: Array.from({ length: 6 }).map((_, idx) => String(value.companyInfoLines?.[idx] ?? "")),
+        footerText: String(value.footerText ?? ""),
+        logoDataUrl: String(value.logoDataUrl ?? ""),
+        companyNameSize: (["hidden", "small", "standard", "large"].includes(String(value.companyNameSize))
+          ? value.companyNameSize
+          : "standard") as InvoicingDocumentLayoutOptions["companyNameSize"],
+        showTotalIncl: value.showTotalIncl === true,
+        showPriceIncl: value.showPriceIncl === true,
+        showPriceExcl: value.showPriceExcl === true,
+        showTotalExcl: value.showTotalExcl === true,
+        showVatPercent: value.showVatPercent === true,
+      });
+    } catch {
+      setDocLayoutOptions(DEFAULT_DOCUMENT_LAYOUT_OPTIONS);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDocumentLayoutOptions(activeLayout);
+  }, [activeLayout, loadDocumentLayoutOptions]);
+
+  const saveDocumentLayoutOptions = async () => {
+    if (!activeLayout) return;
+    setDocLayoutSaving(true);
+    try {
+      await apiRequest(`/api/settings/invoicing-document-layout/${encodeURIComponent(activeLayout)}`, {
+        method: "PUT",
+        body: JSON.stringify({ value: docLayoutOptions }),
+      });
+      toast({ description: t("invoicingDocLayoutSaved") });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : t("saveFailedGeneric"),
+      });
+    } finally {
+      setDocLayoutSaving(false);
+    }
+  };
+
+  const onLogoFileChange = (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl.startsWith("data:image/")) return;
+      setDocLayoutOptions((prev) => ({ ...prev, logoDataUrl: dataUrl }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+
+  const addLayout = async () => {
     const name = newLayout.trim();
     if (!name) return;
-    setLayouts((prev) => [...prev, name]);
+    const next = layouts.includes(name) ? layouts : [...layouts, name];
+    setLayouts(next);
+    if (!activeLayout) setActiveLayout(name);
+    try {
+      await saveLayouts(next);
+    } catch {
+      void loadLayouts();
+    }
     setNewLayout("");
   };
 
-  const removeLayout = (name: string) => setLayouts((prev) => prev.filter((l) => l !== name));
+  const removeLayout = async (name: string) => {
+    const next = layouts.filter((l) => l !== name);
+    setLayouts(next);
+    if (activeLayout === name) setActiveLayout(next[0] ?? "");
+    try {
+      await saveLayouts(next);
+    } catch {
+      void loadLayouts();
+    }
+  };
+
 
   const LayoutTabs = () => (
     <div className="flex items-center gap-6 justify-center pb-3 border-b border-border mb-5">
       {layouts.map((l) => {
-        const isActive = (activeLayout === "standard" && l === "Standaard") || activeLayout === l;
+        const isActive = activeLayout === l;
         return (
           <button
             key={l}
-            onClick={() => setActiveLayout(l === "Standaard" ? "standard" : (l as "1"))}
+            onClick={() => setActiveLayout(l)}
             className={cn(
               "text-sm font-medium transition-colors",
               isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
@@ -115,42 +261,6 @@ const Invoicing = () => {
     <div className="grid grid-cols-[180px_1fr] items-center gap-4 py-1.5">
       <label className="text-sm text-foreground">{label} :</label>
       <div>{children}</div>
-    </div>
-  );
-
-  const RichToolbar = () => (
-    <div className="border border-border rounded-md bg-muted/20">
-      <div className="flex flex-wrap items-center gap-1 px-2 py-2 border-b border-border">
-        {[Bold, Italic, Underline, Strikethrough].map((Icon, i) => (
-          <button key={i} className="h-8 w-8 inline-flex items-center justify-center rounded hover:bg-muted text-foreground">
-            <Icon className="h-4 w-4" />
-          </button>
-        ))}
-        <span className="w-px h-5 bg-border mx-1" />
-        {[List, Quote, Minus].map((Icon, i) => (
-          <button key={i} className="h-8 w-8 inline-flex items-center justify-center rounded hover:bg-muted text-foreground">
-            <Icon className="h-4 w-4" />
-          </button>
-        ))}
-        <span className="w-px h-5 bg-border mx-1" />
-        {[LinkIcon, ImageIcon, Video, Undo2, Redo2].map((Icon, i) => (
-          <button key={i} className="h-8 w-8 inline-flex items-center justify-center rounded hover:bg-muted text-foreground">
-            <Icon className="h-4 w-4" />
-          </button>
-        ))}
-      </div>
-      <Textarea placeholder={t("typeSomething")} className="min-h-[140px] border-0 rounded-none focus-visible:ring-0 resize-none bg-transparent" />
-    </div>
-  );
-
-  const Placeholders = () => (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-1 py-2 text-sm text-muted-foreground">
-      <button className="inline-flex items-center gap-1.5 hover:text-foreground"><Save className="h-4 w-4 text-primary" /> {t("save")}</button>
-      <span className="hover:text-foreground cursor-pointer">[{t("documentLink")}]</span>
-      <span className="hover:text-foreground cursor-pointer">[{t("docNumber")}]</span>
-      <span className="hover:text-foreground cursor-pointer">[{t("companyNameField")}]</span>
-      <span className="hover:text-foreground cursor-pointer">[{t("forAttention")}]</span>
-      <span className="hover:text-foreground cursor-pointer">[{t("emailField")}]</span>
     </div>
   );
 
@@ -322,17 +432,24 @@ const Invoicing = () => {
                   </Button>
                 </div>
                 <div className="divide-y divide-border border border-border rounded-md">
-                  {layouts.map((l) => (
-                    <div key={l} className="flex items-center justify-between px-4 py-2.5 text-sm">
-                      <span className="text-foreground">{l}</span>
-                      <div className="flex items-center gap-2">
-                        <button className="text-muted-foreground hover:text-primary"><Pencil className="h-4 w-4" /></button>
-                        <button className="text-muted-foreground hover:text-destructive" onClick={() => removeLayout(l)}>
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                  {layouts.length === 0 ? (
+                    <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+                      <FileText className="h-10 w-10 mx-auto mb-2 opacity-40" />
+                      <p>No layouts yet.</p>
                     </div>
-                  ))}
+                  ) : (
+                    layouts.map((l) => (
+                      <div key={l} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                        <span className="text-foreground">{l}</span>
+                        <div className="flex items-center gap-2">
+                          <button className="text-muted-foreground hover:text-primary"><Pencil className="h-4 w-4" /></button>
+                          <button className="text-muted-foreground hover:text-destructive" onClick={() => removeLayout(l)}>
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </Card>
             )}
@@ -341,23 +458,81 @@ const Invoicing = () => {
               <Card className="p-6 shadow-card">
                 <LayoutTabs />
                 <div className="max-w-2xl mx-auto space-y-1">
-                  <FormRow label={t("firstInvoiceNr")}><Input defaultValue="1" className="h-9 max-w-xs" /></FormRow>
-                  <FormRow label={t("firstQuotationNr")}><Input defaultValue="1" className="h-9 max-w-xs" /></FormRow>
-                  <FormRow label={t("firstCreditNoteNr")}><Input defaultValue="1" className="h-9 max-w-xs" /></FormRow>
-                  <FormRow label={t("firstDeliveryNoteNr")}><Input defaultValue="0" className="h-9 max-w-xs" /></FormRow>
+                  <FormRow label={t("firstInvoiceNr")}>
+                    <Input
+                      type="number"
+                      value={String(docLayoutOptions.firstInvoiceNr)}
+                      onChange={(e) =>
+                        setDocLayoutOptions((prev) => ({ ...prev, firstInvoiceNr: Number(e.target.value) || 0 }))
+                      }
+                      className="h-9 max-w-xs"
+                    />
+                  </FormRow>
+                  <FormRow label={t("firstQuotationNr")}>
+                    <Input
+                      type="number"
+                      value={String(docLayoutOptions.firstQuotationNr)}
+                      onChange={(e) =>
+                        setDocLayoutOptions((prev) => ({ ...prev, firstQuotationNr: Number(e.target.value) || 0 }))
+                      }
+                      className="h-9 max-w-xs"
+                    />
+                  </FormRow>
+                  <FormRow label={t("firstCreditNoteNr")}>
+                    <Input
+                      type="number"
+                      value={String(docLayoutOptions.firstCreditNoteNr)}
+                      onChange={(e) =>
+                        setDocLayoutOptions((prev) => ({ ...prev, firstCreditNoteNr: Number(e.target.value) || 0 }))
+                      }
+                      className="h-9 max-w-xs"
+                    />
+                  </FormRow>
+                  <FormRow label={t("firstDeliveryNoteNr")}>
+                    <Input
+                      type="number"
+                      value={String(docLayoutOptions.firstDeliveryNoteNr)}
+                      onChange={(e) =>
+                        setDocLayoutOptions((prev) => ({ ...prev, firstDeliveryNoteNr: Number(e.target.value) || 0 }))
+                      }
+                      className="h-9 max-w-xs"
+                    />
+                  </FormRow>
                   <div className="grid grid-cols-[180px_1fr] items-start gap-4 py-2">
                     <label className="text-sm text-foreground pt-2">{t("companyInfo")} :</label>
                     <div className="space-y-2 max-w-md">
-                      {Array.from({ length: 6 }).map((_, i) => (
-                        <Input key={i} defaultValue={i === 0 ? "dsfgf" : i === 1 ? "wertret" : ""} className="h-9" />
+                      {docLayoutOptions.companyInfoLines.map((line, i) => (
+                        <Input
+                          key={i}
+                          value={line}
+                          onChange={(e) =>
+                            setDocLayoutOptions((prev) => ({
+                              ...prev,
+                              companyInfoLines: prev.companyInfoLines.map((item, idx) => (idx === i ? e.target.value : item)),
+                            }))
+                          }
+                          className="h-9"
+                        />
                       ))}
                     </div>
                   </div>
                   <FormRow label={t("footerTextInv")}>
-                    <Input defaultValue="Verkoopsvoorwaarden zie keerzijde" className="h-9 max-w-md" />
+                    <Input
+                      value={docLayoutOptions.footerText}
+                      onChange={(e) => setDocLayoutOptions((prev) => ({ ...prev, footerText: e.target.value }))}
+                      className="h-9 max-w-md"
+                    />
                   </FormRow>
                   <FormRow label={t("companyNameSize")}>
-                    <Select defaultValue="standard">
+                    <Select
+                      value={docLayoutOptions.companyNameSize}
+                      onValueChange={(value) =>
+                        setDocLayoutOptions((prev) => ({
+                          ...prev,
+                          companyNameSize: value as InvoicingDocumentLayoutOptions["companyNameSize"],
+                        }))
+                      }
+                    >
                       <SelectTrigger className="h-9 max-w-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="hidden">{t("sizeNotShown")}</SelectItem>
@@ -368,28 +543,56 @@ const Invoicing = () => {
                     </Select>
                   </FormRow>
                   {[
-                    { k: "totalIncl", c: false },
-                    { k: "priceIncl", c: true },
-                    { k: "priceExcl", c: true },
-                    { k: "totalExcl", c: false },
-                    { k: "vatPercent", c: false },
+                    { k: "totalIncl", c: docLayoutOptions.showTotalIncl, field: "showTotalIncl" },
+                    { k: "priceIncl", c: docLayoutOptions.showPriceIncl, field: "showPriceIncl" },
+                    { k: "priceExcl", c: docLayoutOptions.showPriceExcl, field: "showPriceExcl" },
+                    { k: "totalExcl", c: docLayoutOptions.showTotalExcl, field: "showTotalExcl" },
+                    { k: "vatPercent", c: docLayoutOptions.showVatPercent, field: "showVatPercent" },
                   ].map((row) => (
                     <div key={row.k} className="grid grid-cols-[180px_1fr] items-center gap-4 py-1">
                       <label className="text-sm text-foreground">{t(row.k as TranslationKey)} :</label>
-                      <Checkbox defaultChecked={row.c} />
+                      <Checkbox
+                        checked={row.c}
+                        onCheckedChange={(checked) =>
+                          setDocLayoutOptions((prev) => ({ ...prev, [row.field]: checked === true }))
+                        }
+                      />
                     </div>
                   ))}
                   <div className="grid grid-cols-[180px_1fr] items-center gap-4 py-3">
                     <label className="text-sm text-foreground">{t("logoLabel")} :</label>
                     <div className="flex items-center gap-4">
-                      <div className="h-16 w-24 bg-foreground rounded flex items-center justify-center text-background">
-                        <Video className="h-7 w-7" />
-                      </div>
-                      <button className="text-sm text-primary hover:underline">{t("removeLabel")}</button>
+                      <label className="h-16 w-24 rounded border border-border overflow-hidden cursor-pointer bg-foreground/10 flex items-center justify-center text-foreground">
+                        {docLayoutOptions.logoDataUrl ? (
+                          <img src={docLayoutOptions.logoDataUrl} alt="Layout logo" className="h-full w-full object-contain bg-white" />
+                        ) : (
+                          <Video className="h-7 w-7" />
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => onLogoFileChange(e.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="text-sm text-primary hover:underline"
+                        onClick={() => setDocLayoutOptions((prev) => ({ ...prev, logoDataUrl: "" }))}
+                      >
+                        {t("removeLabel")}
+                      </button>
                     </div>
                   </div>
                   <div className="flex justify-center pt-3">
-                    <Button variant="ghost" className="gap-2 text-foreground"><Save className="h-4 w-4 text-primary" /> {t("save")}</Button>
+                    <Button
+                      variant="ghost"
+                      className="gap-2 text-foreground"
+                      onClick={() => void saveDocumentLayoutOptions()}
+                      disabled={!activeLayout || docLayoutSaving}
+                    >
+                      <Save className="h-4 w-4 text-primary" /> {t("save")}
+                    </Button>
                   </div>
                 </div>
               </Card>
@@ -516,30 +719,6 @@ const Invoicing = () => {
               </Card>
             )}
 
-            {settingsTab === "signature" && (
-              <Card className="p-6 shadow-card">
-                <LayoutTabs />
-                <div className="max-w-3xl mx-auto space-y-2">
-                  <Placeholders />
-                  <RichToolbar />
-                </div>
-              </Card>
-            )}
-
-            {settingsTab === "email" && (
-              <Card className="p-6 shadow-card">
-                <LayoutTabs />
-                <div className="max-w-3xl mx-auto space-y-4">
-                  <div className="flex items-center gap-4 justify-center">
-                    <label className="text-sm text-foreground">{t("emailSenderName")} :</label>
-                    <Input className="h-9 w-64" />
-                    <Button variant="ghost" className="gap-2 text-foreground"><Save className="h-4 w-4 text-primary" /> {t("save")}</Button>
-                  </div>
-                  <Placeholders />
-                  <RichToolbar />
-                </div>
-              </Card>
-            )}
           </div>
         </div>
       )}

@@ -23,6 +23,7 @@ import { IconChart } from './controlView/controlViewNavIcons';
 import { ControlViewMainContentArea } from './controlView/ControlViewMainContentArea';
 import { useLanguage } from '../contexts/LanguageContext';
 import { POS_API_PREFIX as API } from '../lib/apiOrigin.js';
+import { posTerminalAuthHeaders } from '../lib/posTerminalSession.js';
 import { fetchPosOptionLayoutRegisterKey } from '../lib/posOptionLayoutRegisterKey.js';
 import { LoadingSpinner } from './LoadingSpinner';
 import { publicAssetUrl, resolveMediaSrc } from '../lib/publicAssetUrl.js';
@@ -334,6 +335,9 @@ function SidebarIcon({ id, className }) {
 
 export function ControlView({
   currentUser,
+  realtimeSocket,
+  currentRegisterId,
+  currentRegisterName,
   onLogout,
   onBack,
   onFunctionButtonsSaved,
@@ -1700,7 +1704,9 @@ export function ControlView({
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
-      const res = await fetch(`${API}/users`);
+      const res = await fetch(`${API}/users`, {
+        headers: { ...posTerminalAuthHeaders() },
+      });
       const data = await res.json();
       setUsers(Array.isArray(data) ? data : []);
     } catch {
@@ -1710,9 +1716,36 @@ export function ControlView({
     }
   }, []);
 
+  const resolveCurrentRegisterIdForUserWrite = useCallback(async () => {
+    const fromProp = String(currentRegisterId || '').trim();
+    if (fromProp) return fromProp;
+    try {
+      const res = await fetch(`${API}/pos-registers/current-device`, {
+        headers: { ...posTerminalAuthHeaders() },
+      });
+      const data = await res.json().catch(() => ({}));
+      const fromDevice = String(data?.register?.id || '').trim();
+      if (fromDevice) return fromDevice;
+    } catch {
+      // Ignore and continue with empty fallback.
+    }
+    return '';
+  }, [API, currentRegisterId]);
+
   useEffect(() => {
     if (effectiveControlSidebarId === 'users') fetchUsers();
   }, [effectiveControlSidebarId, fetchUsers]);
+
+  useEffect(() => {
+    if (!realtimeSocket?.on) return undefined;
+    const handleUsersChanged = () => {
+      void fetchUsers();
+    };
+    realtimeSocket.on('pos-users:changed', handleUsersChanged);
+    return () => {
+      realtimeSocket.off('pos-users:changed', handleUsersChanged);
+    };
+  }, [realtimeSocket, fetchUsers]);
 
   const fetchSubproducts = useCallback(async (groupId, silent = false) => {
     if (!groupId) {
@@ -1966,6 +1999,7 @@ export function ControlView({
         storeName: String(finalTicketsCompanyData1 ?? '')
           .trim()
           .slice(0, 120),
+        reportSettings: JSON.stringify(reportSettings || {}),
       });
       const res = await fetch(`${API}/reports/periodic?${qs}`);
       const data = await res.json().catch(() => ({}));
@@ -1989,6 +2023,7 @@ export function ControlView({
     periodicReportEndTime,
     periodicReportStartDate,
     periodicReportStartTime,
+    reportSettings,
     showToast,
     tr,
   ]);
@@ -5308,7 +5343,12 @@ export function ControlView({
   const handleSaveReportSettings = () => {
     setSavingReportSettings(true);
     try {
-      if (typeof localStorage !== 'undefined') localStorage.setItem('pos_report_settings', JSON.stringify(reportSettings));
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('pos_report_settings', JSON.stringify(reportSettings));
+      }
+      showToast('success', tr('control.saved', 'Saved.'));
+    } catch (e) {
+      showToast('error', e?.message || tr('control.saveFailed', 'Save failed.'));
     } finally {
       setSavingReportSettings(false);
     }
@@ -5336,7 +5376,9 @@ export function ControlView({
     setUserModalActiveField(null);
     setUserPrivileges({ ...DEFAULT_USER_PRIVILEGES });
     try {
-      const res = await fetch(`${API}/users/${u.id}`);
+      const res = await fetch(`${API}/users/${u.id}`, {
+        headers: { ...posTerminalAuthHeaders() },
+      });
       const data = await res.json();
       if (res.ok && data) {
         setUserName(data.name || '');
@@ -5364,39 +5406,57 @@ export function ControlView({
   };
 
   const handleSaveUser = async () => {
+    const normalizedPin = String(userPin ?? '').replace(/\D/g, '').slice(0, 4);
+    if (!editingUserId && normalizedPin.length !== 4) {
+      showToast('error', 'PIN must be exactly 4 digits');
+      return;
+    }
+    if (editingUserId && normalizedPin !== '' && normalizedPin.length !== 4) {
+      showToast('error', 'PIN must be exactly 4 digits');
+      return;
+    }
     setSavingUser(true);
     try {
       if (editingUserId) {
         const body = { name: userName.trim() || 'New user', role: userRole === 'admin' ? 'admin' : 'waiter' };
-        if (userPin !== '') body.pin = userPin;
+        if (normalizedPin !== '') body.pin = normalizedPin;
         const res = await fetch(`${API}/users/${editingUserId}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...posTerminalAuthHeaders() },
           body: JSON.stringify(body)
         });
-        const updated = await res.json();
+        const updated = await res.json().catch(() => ({}));
         if (res.ok && updated) {
           setUsers((prev) => prev.map((u) => (u.id === editingUserId ? { ...u, ...updated } : u)));
           closeUserModal();
           fetchUsers();
+        } else {
+          showToast('error', updated?.error || 'Failed to update user');
         }
       } else {
+        const resolvedRegisterId = await resolveCurrentRegisterIdForUserWrite();
         const res = await fetch(`${API}/users`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...posTerminalAuthHeaders() },
           body: JSON.stringify({
             name: userName.trim() || 'New user',
-            pin: userPin || '1234',
-            role: userRole === 'admin' ? 'admin' : 'waiter'
+            pin: normalizedPin || '1234',
+            role: userRole === 'admin' ? 'admin' : 'waiter',
+            registerId: resolvedRegisterId || undefined,
+            registerName: String(currentRegisterName || '').trim() || undefined,
           })
         });
-        const created = await res.json();
+        const created = await res.json().catch(() => ({}));
         if (res.ok && created) {
           setUsers((prev) => [...prev, created].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
           closeUserModal();
           fetchUsers();
+        } else {
+          showToast('error', created?.error || 'Failed to create user');
         }
       }
+    } catch {
+      showToast('error', 'Failed to save user');
     } finally {
       setSavingUser(false);
     }
@@ -5404,7 +5464,10 @@ export function ControlView({
 
   const handleDeleteUser = async (id) => {
     try {
-      const res = await fetch(`${API}/users/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API}/users/${id}`, {
+        method: 'DELETE',
+        headers: { ...posTerminalAuthHeaders() },
+      });
       if (res.ok) setUsers((prev) => prev.filter((u) => u.id !== id));
       else fetchUsers();
     } catch {
@@ -6065,6 +6128,9 @@ export function ControlView({
           })}
         </nav>
         <div className="p-4 w-full flex flex-col items-center gap-2">
+          {currentRegisterName && (
+            <p className="text-pos-text text-xl font-medium truncate px-1">{currentRegisterName}</p>
+          )}
           {currentUser && (
             <p className="text-pos-text text-xl font-medium truncate px-1">{currentUser.label}</p>
           )}
@@ -6091,6 +6157,9 @@ export function ControlView({
       <ControlViewMainContentArea
         ctx={{
           currentUser,
+          currentRegisterId,
+          currentRegisterName,
+          realtimeSocket,
           BARCODE_SCANNER_TYPE_OPTIONS,
           CASH_REGISTER_SUB_NAV_ITEMS,
           CREDIT_CARD_TYPE_OPTIONS,
@@ -6375,6 +6444,7 @@ export function ControlView({
           setProdTicketsSpaceAbove,
           setProdTicketsTicketTearable,
           setProductSearch,
+          setReportSetting,
           setReportGenerateUntil,
           setReportTabId,
           setFinancialReportKind,

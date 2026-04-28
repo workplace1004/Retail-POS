@@ -82,6 +82,43 @@ async function resolvePosRegisterFromTerminalBearer(req) {
   });
 }
 
+/** Resolve current POS register from explicit hints, terminal token, then client IP. */
+async function resolvePosRegisterForRequest(req, tx = prisma, opts = {}) {
+  const hintedId = String(opts?.registerId || '').trim();
+  const hintedName = String(opts?.registerName || '').trim();
+  if (hintedId && hintedId !== 'all') {
+    const reg = await tx.posRegister.findUnique({
+      where: { id: hintedId },
+      select: { id: true, name: true, ipAddress: true },
+    });
+    if (reg) return reg;
+  }
+  const fromToken = posTerminalRegisterIdFromBearer(req);
+  if (fromToken) {
+    const reg = await tx.posRegister.findUnique({
+      where: { id: fromToken },
+      select: { id: true, name: true, ipAddress: true },
+    });
+    if (reg) return reg;
+  }
+  const ip = getPosClientIp(req);
+  if (ip) {
+    const reg = await tx.posRegister.findFirst({
+      where: { ipAddress: ip },
+      select: { id: true, name: true, ipAddress: true },
+    });
+    if (reg) return reg;
+  }
+  if (hintedName) {
+    const reg = await tx.posRegister.findFirst({
+      where: { name: hintedName },
+      select: { id: true, name: true, ipAddress: true },
+    });
+    if (reg) return reg;
+  }
+  return null;
+}
+
 /** PosRegister id for new orders: terminal JWT first, else client IP match. */
 async function resolvePosRegisterIdForOrder(req) {
   const fromToken = posTerminalRegisterIdFromBearer(req);
@@ -344,6 +381,7 @@ app.post('/api/webpanel/users', async (req, res) => {
       },
       select: { id: true, email: true, name: true, createdAt: true },
     });
+    io.emit('webpanel-users:changed', { action: 'created', id: created.id });
     return res.status(201).json({
       id: created.id,
       email: created.email,
@@ -391,6 +429,7 @@ app.patch('/api/webpanel/users/:id', async (req, res) => {
       data,
       select: { id: true, email: true, name: true, createdAt: true },
     });
+    io.emit('webpanel-users:changed', { action: 'updated', id: updated.id });
     return res.json({
       id: updated.id,
       email: updated.email,
@@ -417,6 +456,7 @@ app.delete('/api/webpanel/users/:id', async (req, res) => {
   }
   try {
     await prisma.webpanelUser.delete({ where: { id } });
+    io.emit('webpanel-users:changed', { action: 'deleted', id });
     return res.status(204).send();
   } catch (err) {
     if (err?.code === 'P2025') {
@@ -457,9 +497,26 @@ app.get('/api/webpanel/pos-users', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
   if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
   try {
-    const users = await prisma.user.findMany({ orderBy: { name: 'asc' } });
+    const users = await prisma.user.findMany({
+      orderBy: { name: 'asc' },
+      include: {
+        posRegisterLinks: {
+          include: {
+            register: { select: { name: true } },
+          },
+        },
+      },
+    });
     return res.json(
-      users.map((u) => ({ id: u.id, name: u.name, label: u.name, role: normalizeUserRole(u.role) })),
+      users.map((u) => ({
+        id: u.id,
+        name: u.name,
+        label: u.name,
+        role: normalizeUserRole(u.role),
+        registerNames: (u.posRegisterLinks || [])
+          .map((link) => String(link?.register?.name || '').trim())
+          .filter(Boolean),
+      })),
     );
   } catch (err) {
     console.error('GET /api/webpanel/pos-users', err);
@@ -1236,6 +1293,139 @@ app.delete('/api/webpanel/labels/queue/:id', async (req, res) => {
     }
     console.error('DELETE /api/webpanel/labels/queue/:id', err);
     return res.status(500).json({ error: err.message || 'Failed to delete label queue item' });
+  }
+});
+
+app.get('/api/webpanel/invoicing/line-items', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const rows = await prisma.invoicing.findMany({ orderBy: { createdAt: 'asc' } });
+    const items = rows.map((row) => ({
+      id: row.id,
+      qty: row.qty,
+      description: row.description,
+      totalIncl: row.totalIncl,
+      perPieceIncl: row.perPieceIncl,
+      perPieceExcl: row.perPieceExcl,
+      discount: row.discount,
+      vat: row.vat,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    }));
+    return res.json({ items });
+  } catch (err) {
+    console.error('GET /api/webpanel/invoicing/line-items', err);
+    return res.status(500).json({ error: err.message || 'Failed to load invoicing line items' });
+  }
+});
+
+app.post('/api/webpanel/invoicing/line-items', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const incoming = normalizeInvoicingLineItem(req.body);
+    if (!incoming) {
+      return res.status(400).json({ error: 'Invalid line item payload' });
+    }
+    const created = await prisma.invoicing.create({
+      data: {
+        qty: incoming.qty,
+        description: incoming.description,
+        totalIncl: incoming.totalIncl,
+        perPieceIncl: incoming.perPieceIncl,
+        perPieceExcl: incoming.perPieceExcl,
+        discount: incoming.discount,
+        vat: incoming.vat,
+      },
+    });
+    return res.status(201).json({
+      id: created.id,
+      qty: created.qty,
+      description: created.description,
+      totalIncl: created.totalIncl,
+      perPieceIncl: created.perPieceIncl,
+      perPieceExcl: created.perPieceExcl,
+      discount: created.discount,
+      vat: created.vat,
+      createdAt: created.createdAt,
+      updatedAt: created.updatedAt,
+    });
+  } catch (err) {
+    console.error('POST /api/webpanel/invoicing/line-items', err);
+    return res.status(500).json({ error: err.message || 'Failed to save invoicing line item' });
+  }
+});
+
+app.patch('/api/webpanel/invoicing/line-items/:id', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid line item id' });
+  try {
+    const incoming = normalizeInvoicingLineItem(req.body);
+    if (!incoming) {
+      return res.status(400).json({ error: 'Invalid line item payload' });
+    }
+    const updated = await prisma.invoicing.update({
+      where: { id },
+      data: {
+        qty: incoming.qty,
+        description: incoming.description,
+        totalIncl: incoming.totalIncl,
+        perPieceIncl: incoming.perPieceIncl,
+        perPieceExcl: incoming.perPieceExcl,
+        discount: incoming.discount,
+        vat: incoming.vat,
+      },
+    });
+    return res.json({
+      id: updated.id,
+      qty: updated.qty,
+      description: updated.description,
+      totalIncl: updated.totalIncl,
+      perPieceIncl: updated.perPieceIncl,
+      perPieceExcl: updated.perPieceExcl,
+      discount: updated.discount,
+      vat: updated.vat,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    });
+  } catch (err) {
+    if (err?.code === 'P2025') {
+      return res.status(404).json({ error: 'Line item not found' });
+    }
+    console.error('PATCH /api/webpanel/invoicing/line-items/:id', err);
+    return res.status(500).json({ error: err.message || 'Failed to update invoicing line item' });
+  }
+});
+
+app.delete('/api/webpanel/invoicing/line-items/:id', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Invalid line item id' });
+  try {
+    await prisma.invoicing.delete({ where: { id } });
+    return res.status(204).end();
+  } catch (err) {
+    if (err?.code === 'P2025') {
+      return res.status(404).json({ error: 'Line item not found' });
+    }
+    console.error('DELETE /api/webpanel/invoicing/line-items/:id', err);
+    return res.status(500).json({ error: err.message || 'Failed to delete invoicing line item' });
+  }
+});
+
+app.delete('/api/webpanel/invoicing/line-items', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    await prisma.invoicing.deleteMany({});
+    return res.status(204).end();
+  } catch (err) {
+    console.error('DELETE /api/webpanel/invoicing/line-items', err);
+    return res.status(500).json({ error: err.message || 'Failed to clear invoicing line items' });
   }
 });
 
@@ -2537,6 +2727,36 @@ const SETTING_KEY_REPORT_SETTINGS = 'report_settings';
 const SETTING_KEY_KIOSK_BASKET = 'kiosk_basket_draft';
 const KIOSK_BASKET_MAX_LINES = 300;
 
+function normalizeInvoicingLineItem(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const qty = Number(raw.qty);
+  const totalIncl = Number(raw.totalIncl);
+  const perPieceIncl = Number(raw.perPieceIncl);
+  const perPieceExcl = Number(raw.perPieceExcl);
+  const discount = Number(raw.discount);
+  const vat = Number(raw.vat);
+
+  const safeQty = Number.isFinite(qty) ? Math.max(1, Math.min(qty, 999999)) : 0;
+  const description = String(raw.description || '').trim().slice(0, 2000);
+  if (!safeQty || !description) return null;
+
+  const safeTotalIncl = Number.isFinite(totalIncl) ? Math.round(totalIncl * 100) / 100 : 0;
+  const safePerPieceIncl = Number.isFinite(perPieceIncl) ? Math.round(perPieceIncl * 100) / 100 : 0;
+  const safePerPieceExcl = Number.isFinite(perPieceExcl) ? Math.round(perPieceExcl * 100) / 100 : 0;
+  const safeDiscount = Number.isFinite(discount) ? Math.max(0, Math.min(discount, 100)) : 0;
+  const safeVat = Number.isFinite(vat) ? Math.max(0, Math.min(vat, 100)) : 0;
+
+  return {
+    qty: safeQty,
+    description,
+    totalIncl: safeTotalIncl,
+    perPieceIncl: safePerPieceIncl,
+    perPieceExcl: safePerPieceExcl,
+    discount: safeDiscount,
+    vat: safeVat,
+  };
+}
+
 function normalizeKioskBasketPayload(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { lines: [] };
   const rawLines = raw.lines;
@@ -2637,6 +2857,53 @@ function normalizeReportSettings(raw) {
     dailyAutoCreateEnabled: source.dailyAutoCreateEnabled === true,
     autoCreateHour: String(hour).padStart(2, '0'),
     sendEmailTo: String(source.sendEmailTo ?? '').trim().slice(0, 320),
+  };
+}
+
+function normalizeInvoicingLayouts(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    const name = String(item ?? '').trim().slice(0, 120);
+    if (!name) continue;
+    out.push(name);
+  }
+  return [...new Set(out)];
+}
+
+function normalizeInvoicingLayoutName(raw) {
+  return String(raw ?? '').trim().slice(0, 120);
+}
+
+function normalizeInvoicingDocumentLayout(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const toSafeInt = (value, fallback = 0) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(999999999, Math.floor(n)));
+  };
+  const asString = (value, max = 500) => String(value ?? '').trim().slice(0, max);
+  const rawLines = Array.isArray(raw.companyInfoLines) ? raw.companyInfoLines : [];
+  const companyInfoLines = Array.from({ length: 6 }).map((_, idx) => asString(rawLines[idx] ?? '', 250));
+  const companyNameSizeRaw = String(raw.companyNameSize ?? 'standard');
+  const allowedSizes = new Set(['hidden', 'small', 'standard', 'large']);
+  const logoDataUrlRaw = String(raw.logoDataUrl ?? '');
+  const logoDataUrl = logoDataUrlRaw.startsWith('data:image/') ? logoDataUrlRaw.slice(0, 1_500_000) : '';
+
+  return {
+    firstInvoiceNr: toSafeInt(raw.firstInvoiceNr, 1),
+    firstQuotationNr: toSafeInt(raw.firstQuotationNr, 1),
+    firstCreditNoteNr: toSafeInt(raw.firstCreditNoteNr, 1),
+    firstDeliveryNoteNr: toSafeInt(raw.firstDeliveryNoteNr, 0),
+    companyInfoLines,
+    footerText: asString(raw.footerText, 2000),
+    logoDataUrl,
+    companyNameSize: allowedSizes.has(companyNameSizeRaw) ? companyNameSizeRaw : 'standard',
+    showTotalIncl: raw.showTotalIncl === true,
+    showPriceIncl: raw.showPriceIncl === true,
+    showPriceExcl: raw.showPriceExcl === true,
+    showTotalExcl: raw.showTotalExcl === true,
+    showVatPercent: raw.showVatPercent === true,
   };
 }
 
@@ -2792,6 +3059,176 @@ app.put('/api/settings/product-positioning-colors', async (req, res) => {
   } catch (err) {
     console.error('PUT /api/settings/product-positioning-colors', err);
     res.status(500).json({ error: err.message || 'Failed to save product positioning colors' });
+  }
+});
+
+app.get('/api/settings/invoicing-layouts', async (req, res) => {
+  try {
+    let rows = await prisma.invoicingLayout.findMany({ orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] });
+
+    // One-time compatibility migration from legacy AppSetting storage.
+    if (rows.length === 0) {
+      const legacy = await prisma.appSetting.findUnique({ where: { key: 'invoicing_layouts' } });
+      if (legacy?.value) {
+        let parsed = [];
+        try {
+          parsed = normalizeInvoicingLayouts(JSON.parse(legacy.value));
+        } catch {
+          parsed = [];
+        }
+        if (parsed.length > 0) {
+          await prisma.$transaction(
+            parsed.map((name, idx) =>
+              prisma.invoicingLayout.create({
+                data: { name, sortOrder: idx },
+              })
+            )
+          );
+          rows = await prisma.invoicingLayout.findMany({ orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] });
+        }
+      }
+    }
+    const safe = rows.map((r) => r.name);
+    res.json({ value: safe });
+  } catch (err) {
+    console.error('GET /api/settings/invoicing-layouts', err);
+    res.status(500).json({ error: err.message || 'Failed to get invoicing layouts' });
+  }
+});
+
+app.put('/api/settings/invoicing-layouts', async (req, res) => {
+  try {
+    const safe = normalizeInvoicingLayouts(req.body?.value);
+    await prisma.$transaction(async (tx) => {
+      await tx.invoicingLayout.deleteMany({});
+      if (safe.length > 0) {
+        await tx.invoicingLayout.createMany({
+          data: safe.map((name, idx) => ({ name, sortOrder: idx })),
+        });
+      }
+    });
+    res.json({ value: safe });
+  } catch (err) {
+    console.error('PUT /api/settings/invoicing-layouts', err);
+    res.status(500).json({ error: err.message || 'Failed to save invoicing layouts' });
+  }
+});
+
+app.get('/api/settings/invoicing-document-layout/:layoutName', async (req, res) => {
+  try {
+    const layoutName = normalizeInvoicingLayoutName(req.params.layoutName);
+    if (!layoutName) return res.status(400).json({ error: 'layoutName is required' });
+    const row = await prisma.invoicingDocumentLayout.findUnique({ where: { layoutName } });
+    if (!row) {
+      return res.json({
+        value: {
+          firstInvoiceNr: 1,
+          firstQuotationNr: 1,
+          firstCreditNoteNr: 1,
+          firstDeliveryNoteNr: 0,
+          companyInfoLines: ['', '', '', '', '', ''],
+          footerText: '',
+          logoDataUrl: '',
+          companyNameSize: 'standard',
+          showTotalIncl: false,
+          showPriceIncl: true,
+          showPriceExcl: true,
+          showTotalExcl: false,
+          showVatPercent: false,
+        },
+      });
+    }
+    let parsedLines = [];
+    try {
+      const raw = JSON.parse(row.companyInfoLines);
+      parsedLines = Array.isArray(raw) ? raw.map((x) => String(x ?? '').slice(0, 250)) : [];
+    } catch {
+      parsedLines = [];
+    }
+    const companyInfoLines = Array.from({ length: 6 }).map((_, idx) => String(parsedLines[idx] ?? ''));
+    return res.json({
+      value: {
+        firstInvoiceNr: row.firstInvoiceNr,
+        firstQuotationNr: row.firstQuotationNr,
+        firstCreditNoteNr: row.firstCreditNoteNr,
+        firstDeliveryNoteNr: row.firstDeliveryNoteNr,
+        companyInfoLines,
+        footerText: row.footerText,
+        logoDataUrl: row.logoDataUrl,
+        companyNameSize: row.companyNameSize,
+        showTotalIncl: row.showTotalIncl,
+        showPriceIncl: row.showPriceIncl,
+        showPriceExcl: row.showPriceExcl,
+        showTotalExcl: row.showTotalExcl,
+        showVatPercent: row.showVatPercent,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/settings/invoicing-document-layout/:layoutName', err);
+    return res.status(500).json({ error: err.message || 'Failed to load invoicing document layout options' });
+  }
+});
+
+app.put('/api/settings/invoicing-document-layout/:layoutName', async (req, res) => {
+  try {
+    const layoutName = normalizeInvoicingLayoutName(req.params.layoutName);
+    if (!layoutName) return res.status(400).json({ error: 'layoutName is required' });
+    const safe = normalizeInvoicingDocumentLayout(req.body?.value);
+    if (!safe) return res.status(400).json({ error: 'Invalid document layout payload' });
+    const row = await prisma.invoicingDocumentLayout.upsert({
+      where: { layoutName },
+      create: {
+        layoutName,
+        firstInvoiceNr: safe.firstInvoiceNr,
+        firstQuotationNr: safe.firstQuotationNr,
+        firstCreditNoteNr: safe.firstCreditNoteNr,
+        firstDeliveryNoteNr: safe.firstDeliveryNoteNr,
+        companyInfoLines: JSON.stringify(safe.companyInfoLines),
+        footerText: safe.footerText,
+        logoDataUrl: safe.logoDataUrl,
+        companyNameSize: safe.companyNameSize,
+        showTotalIncl: safe.showTotalIncl,
+        showPriceIncl: safe.showPriceIncl,
+        showPriceExcl: safe.showPriceExcl,
+        showTotalExcl: safe.showTotalExcl,
+        showVatPercent: safe.showVatPercent,
+      },
+      update: {
+        firstInvoiceNr: safe.firstInvoiceNr,
+        firstQuotationNr: safe.firstQuotationNr,
+        firstCreditNoteNr: safe.firstCreditNoteNr,
+        firstDeliveryNoteNr: safe.firstDeliveryNoteNr,
+        companyInfoLines: JSON.stringify(safe.companyInfoLines),
+        footerText: safe.footerText,
+        logoDataUrl: safe.logoDataUrl,
+        companyNameSize: safe.companyNameSize,
+        showTotalIncl: safe.showTotalIncl,
+        showPriceIncl: safe.showPriceIncl,
+        showPriceExcl: safe.showPriceExcl,
+        showTotalExcl: safe.showTotalExcl,
+        showVatPercent: safe.showVatPercent,
+      },
+    });
+    return res.json({
+      value: {
+        firstInvoiceNr: row.firstInvoiceNr,
+        firstQuotationNr: row.firstQuotationNr,
+        firstCreditNoteNr: row.firstCreditNoteNr,
+        firstDeliveryNoteNr: row.firstDeliveryNoteNr,
+        companyInfoLines: safe.companyInfoLines,
+        footerText: row.footerText,
+        logoDataUrl: row.logoDataUrl,
+        companyNameSize: row.companyNameSize,
+        showTotalIncl: row.showTotalIncl,
+        showPriceIncl: row.showPriceIncl,
+        showPriceExcl: row.showPriceExcl,
+        showTotalExcl: row.showTotalExcl,
+        showVatPercent: row.showVatPercent,
+      },
+    });
+  } catch (err) {
+    console.error('PUT /api/settings/invoicing-document-layout/:layoutName', err);
+    return res.status(500).json({ error: err.message || 'Failed to save invoicing document layout options' });
   }
 });
 
@@ -3573,12 +4010,14 @@ const financialReportOrdersInclude = {
   posRegister: true,
 };
 
-function loadPaidOrdersForFinancialPeriod(tx, periodStart, periodEndExclusive) {
+function loadPaidOrdersForFinancialPeriod(tx, periodStart, periodEndExclusive, registerId = null) {
+  const where = {
+    status: 'paid',
+    updatedAt: { gte: periodStart, lt: periodEndExclusive },
+  };
+  if (registerId) where.posRegisterId = registerId;
   return tx.order.findMany({
-    where: {
-      status: 'paid',
-      updatedAt: { gte: periodStart, lt: periodEndExclusive },
-    },
+    where,
     include: financialReportOrdersInclude,
     orderBy: { updatedAt: 'asc' },
   });
@@ -3610,6 +4049,16 @@ app.get('/api/reports/financial/x', async (req, res) => {
     const lang = sanitizeReportQueryParam(req.query.lang, 8) || 'en';
     const userName = sanitizeReportQueryParam(req.query.userName, 120);
     const storeName = sanitizeReportQueryParam(req.query.storeName, 120);
+    let reportSettings = null;
+    try {
+      const raw = String(req.query.reportSettings || '').trim();
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) reportSettings = parsed;
+      }
+    } catch {
+      reportSettings = null;
+    }
     const { lines, summary } = buildFinancialReportReceiptLines({
       orders,
       kind: 'x',
@@ -3620,6 +4069,7 @@ app.get('/api/reports/financial/x', async (req, res) => {
       lang,
       userName,
       storeName,
+      reportSettings,
     });
     const nextZNumber = await getFinancialNextZNumber();
     res.json({
@@ -4075,6 +4525,14 @@ app.post('/api/webpanel/reports/z-save', async (req, res) => {
       return { zNumber };
     });
 
+    io.emit('z-reports:changed', {
+      source: 'webpanel',
+      action: 'created',
+      zNumber: result.zNumber,
+      registerId,
+      registerName,
+    });
+
     res.json({ ok: true, zNumber: result.zNumber });
   } catch (err) {
     console.error('POST /api/webpanel/reports/z-save', err);
@@ -4092,11 +4550,23 @@ app.post('/api/reports/financial/z/close', async (req, res) => {
     const lang = sanitizeReportQueryParam(req.body?.lang, 8) || 'en';
     const userName = sanitizeReportQueryParam(req.body?.userName, 120) || closedByName;
     const storeName = sanitizeReportQueryParam(req.body?.storeName, 120) || '';
+    const requestedRegisterId = sanitizeReportQueryParam(req.body?.registerId, 64) || null;
+    const requestedRegisterName = sanitizeReportQueryParam(req.body?.registerName, 120) || null;
+    const reportSettings =
+      req.body?.reportSettings && typeof req.body.reportSettings === 'object' && !Array.isArray(req.body.reportSettings)
+        ? req.body.reportSettings
+        : null;
+    const activeRegister = await resolvePosRegisterForRequest(req, prisma, {
+      registerId: requestedRegisterId,
+      registerName: requestedRegisterName,
+    });
+    const activeRegisterId = activeRegister?.id || null;
+    const activeRegisterName = String(activeRegister?.name || activeRegister?.ipAddress || '').trim() || null;
 
     const result = await prisma.$transaction(async (tx) => {
       const periodStart = await getFinancialReportingPeriodStart(tx);
       const periodEnd = new Date();
-      const orders = await loadPaidOrdersForFinancialPeriod(tx, periodStart, periodEnd);
+      const orders = await loadPaidOrdersForFinancialPeriod(tx, periodStart, periodEnd, activeRegisterId);
       const zNumber = await getFinancialNextZNumber(tx);
       const { lines, summary } = buildFinancialReportReceiptLines({
         orders,
@@ -4108,6 +4578,7 @@ app.post('/api/reports/financial/z/close', async (req, res) => {
         lang,
         userName,
         storeName,
+        reportSettings,
       });
       if ((Number(summary?.grossTotal) || 0) <= 0) {
         const e = new Error('Cannot close Z report with €0 total.');
@@ -4117,6 +4588,8 @@ app.post('/api/reports/financial/z/close', async (req, res) => {
       const archive = {
         ...summary,
         lines,
+        registerId: activeRegisterId,
+        registerName: activeRegisterName,
         closedAt: periodEnd.toISOString(),
       };
       await tx.zReport.create({
@@ -4135,12 +4608,22 @@ app.post('/api/reports/financial/z/close', async (req, res) => {
       return { lines, summary, zNumber, periodStart, periodEnd, archive };
     });
 
+    io.emit('z-reports:changed', {
+      source: 'pos',
+      action: 'created',
+      zNumber: result.zNumber,
+      registerId: activeRegisterId,
+      registerName: activeRegisterName,
+    });
+
     res.json({
       lines: result.lines,
       summary: result.summary,
       zNumber: result.zNumber,
       periodStart: result.periodStart.toISOString(),
       periodEnd: result.periodEnd.toISOString(),
+      registerId: activeRegisterId,
+      registerName: activeRegisterName,
     });
   } catch (err) {
     console.error('POST /api/reports/financial/z/close', err);
@@ -4235,6 +4718,16 @@ app.get('/api/reports/periodic', async (req, res) => {
     const lang = sanitizeReportQueryParam(req.query.lang, 8) || 'en';
     const userName = sanitizeReportQueryParam(req.query.userName, 120);
     const storeName = sanitizeReportQueryParam(req.query.storeName, 120);
+    let reportSettings = null;
+    try {
+      const raw = String(req.query.reportSettings || '').trim();
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) reportSettings = parsed;
+      }
+    } catch {
+      reportSettings = null;
+    }
 
     const lines = buildPeriodicReportReceiptLines({
       orders,
@@ -4246,6 +4739,7 @@ app.get('/api/reports/periodic', async (req, res) => {
       lang,
       userName,
       storeName,
+      reportSettings,
     });
 
     res.json({
@@ -4994,7 +5488,7 @@ app.post('/api/users/:id/work-time-events', async (req, res) => {
 
 app.post('/api/users', async (req, res) => {
   try {
-    const { name, pin, role } = req.body;
+    const { name, pin, role, registerId: requestedRegisterId, registerName: requestedRegisterName } = req.body;
     const pinStr = pin != null ? String(pin).trim() : '';
     if (!isValidFourDigitPosPin(pinStr)) {
       return res.status(400).json({ error: 'PIN must be exactly 4 digits' });
@@ -5006,12 +5500,64 @@ app.post('/api/users', async (req, res) => {
         pin: pinStr
       }
     });
+
+    // Best-effort register linking: never fail user creation if linking cannot be persisted.
+    try {
+      const requestedId = requestedRegisterId != null ? String(requestedRegisterId).trim() : '';
+      let registerId = null;
+
+      if (requestedId) {
+        const reg = await prisma.posRegister.findUnique({
+          where: { id: requestedId },
+          select: { id: true },
+        });
+        registerId = reg?.id || null;
+      }
+
+      const registerIdFromToken = posTerminalRegisterIdFromBearer(req);
+      if (!registerId && registerIdFromToken) {
+        const reg = await prisma.posRegister.findUnique({
+          where: { id: registerIdFromToken },
+          select: { id: true },
+        });
+        registerId = reg?.id || null;
+      }
+      if (!registerId) {
+        const clientIp = getPosClientIp(req);
+        if (clientIp) {
+          const reg = await prisma.posRegister.findFirst({
+            where: { ipAddress: clientIp },
+            select: { id: true },
+          });
+          registerId = reg?.id || null;
+        }
+      }
+      if (!registerId) {
+        const registerName = requestedRegisterName != null ? String(requestedRegisterName).trim() : '';
+        if (registerName) {
+          const reg = await prisma.posRegister.findFirst({
+            where: { name: registerName },
+            select: { id: true },
+          });
+          registerId = reg?.id || null;
+        }
+      }
+      if (registerId) {
+        await prisma.posRegisterUser.create({
+          data: { registerId, userId: created.id },
+        });
+      }
+    } catch (linkErr) {
+      console.warn('POST /api/users register-link skipped:', linkErr?.message || linkErr);
+    }
+
     res.status(201).json({
       id: created.id,
       name: created.name,
       label: created.name,
       role: normalizeUserRole(created.role)
     });
+    io.emit('pos-users:changed', { action: 'created', id: created.id });
   } catch (err) {
     console.error('POST /api/users', err);
     res.status(500).json({ error: err.message || 'Failed to create user' });
@@ -5034,6 +5580,7 @@ app.patch('/api/users/:id', async (req, res) => {
     if (role !== undefined) data.role = normalizeUserRole(role);
     const updated = await prisma.user.update({ where: { id }, data });
     res.json({ id: updated.id, name: updated.name, label: updated.name, role: normalizeUserRole(updated.role) });
+    io.emit('pos-users:changed', { action: 'updated', id: updated.id });
   } catch (err) {
     console.error('PATCH /api/users/:id', err);
     res.status(500).json({ error: err.message || 'Failed to update user' });
@@ -5042,8 +5589,10 @@ app.patch('/api/users/:id', async (req, res) => {
 
 app.delete('/api/users/:id', async (req, res) => {
   try {
-    await prisma.user.delete({ where: { id: req.params.id } });
+    const id = req.params.id;
+    await prisma.user.delete({ where: { id } });
     res.status(204).send();
+    io.emit('pos-users:changed', { action: 'deleted', id });
   } catch (err) {
     console.error('DELETE /api/users/:id', err);
     res.status(500).json({ error: err.message || 'Failed to delete user' });

@@ -374,3 +374,48 @@ model ZReport {
   scope          String   @default("store")
   createdAt      DateTime @default(now())
 }
+
+/// Invoicing line entries created from webpanel "New document" add line button.
+model Invoicing {
+  id           Int      @id @default(autoincrement())
+  qty          Float
+  description  String
+  totalIncl    Float
+  perPieceIncl Float
+  perPieceExcl Float
+  discount     Float    @default(0)
+  vat          Float    @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+/// Saved document layouts for Invoicing settings page.
+model InvoicingLayout {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Saved per-layout options for Invoicing "Document layout" page.
+model InvoicingDocumentLayout {
+  id                 String   @id @default(cuid())
+  layoutName         String   @unique
+  firstInvoiceNr     Int      @default(1)
+  firstQuotationNr   Int      @default(1)
+  firstCreditNoteNr  Int      @default(1)
+  firstDeliveryNoteNr Int     @default(0)
+  companyInfoLines   String   @default("[]")
+  footerText         String   @default("")
+  logoDataUrl        String   @default("")
+  companyNameSize    String   @default("standard")
+  showTotalIncl      Boolean  @default(false)
+  showPriceIncl      Boolean  @default(true)
+  showPriceExcl      Boolean  @default(true)
+  showTotalExcl      Boolean  @default(false)
+  showVatPercent     Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+

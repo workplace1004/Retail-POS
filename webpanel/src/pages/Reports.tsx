@@ -49,6 +49,7 @@ import {
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiRequest } from "@/lib/api";
+import { getRealtimeSocket } from "@/lib/realtime";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import {
@@ -1001,13 +1002,17 @@ const Reports = () => {
     }
   }, [dailyAutoCreateEmail, dailyAutoCreateEnabled, dailyAutoCreateHour, reportSectionVisibility, t]);
 
-  const loadZHistoryRows = useCallback(async () => {
+  const loadZHistoryRows = useCallback(async (preferLatest = false) => {
     setZHistoryLoading(true);
     try {
       const rows = await apiRequest<ZHistoryRow[]>("/api/reports/financial/z/history?limit=200");
       const list = Array.isArray(rows) ? rows : [];
       setZHistoryRows(list);
-      setZHistoryReportId((prev) => (prev && list.some((r) => r.id === prev) ? prev : list[0]?.id || ""));
+      if (preferLatest) {
+        setZHistoryReportId(list[0]?.id || "");
+      } else {
+        setZHistoryReportId((prev) => (prev && list.some((r) => r.id === prev) ? prev : list[0]?.id || ""));
+      }
     } catch (e) {
       setZHistoryRows([]);
       setZHistoryReportId("");
@@ -2027,6 +2032,18 @@ const Reports = () => {
     if (tab !== "z" || zSubTab !== "history") return;
     void loadZHistoryRows();
   }, [tab, zSubTab, loadZHistoryRows]);
+
+  useEffect(() => {
+    const socket = getRealtimeSocket();
+    const handleZReportsChanged = () => {
+      if (tab !== "z") return;
+      void loadZHistoryRows(true);
+    };
+    socket.on("z-reports:changed", handleZReportsChanged);
+    return () => {
+      socket.off("z-reports:changed", handleZReportsChanged);
+    };
+  }, [tab, loadZHistoryRows]);
   useEffect(() => {
     if (!zHistoryFilteredRows.length) {
       setZHistoryReportId("");

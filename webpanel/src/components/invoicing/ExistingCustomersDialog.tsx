@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { apiRequest } from "@/lib/api";
 
 export interface ExistingCustomer {
   name: string;
@@ -20,19 +21,59 @@ interface ExistingCustomersDialogProps {
   customers?: ExistingCustomer[];
 }
 
-const defaultCustomers: ExistingCustomer[] = [
-  { name: "pospoint", subName: "musti musti", street: "Mezenstraat", postalCity: "3600 Genk", country: "België", vatNumber: "BE1234567890" },
-  { name: "TestCustomer", street: "Street NoTest.", postalCity: "12000 Tirana", vatNumber: "123456789" },
-];
+type CustomerApiRow = Record<string, unknown>;
 
 export function ExistingCustomersDialog({
   open,
   onOpenChange,
   onSelect,
-  customers = defaultCustomers,
+  customers: customersProp,
 }: ExistingCustomersDialogProps) {
   const { t } = useLanguage();
   const [query, setQuery] = useState("");
+  const [customers, setCustomers] = useState<ExistingCustomer[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (customersProp) {
+      setCustomers(customersProp);
+      return;
+    }
+    let cancelled = false;
+    const loadCustomers = async () => {
+      try {
+        const rows = await apiRequest<CustomerApiRow[]>("/api/customers");
+        if (cancelled) return;
+        const mapped = (Array.isArray(rows) ? rows : []).map((row) => {
+          const companyName = String(row.companyName ?? "").trim();
+          const firstName = String(row.firstName ?? "").trim();
+          const lastName = String(row.lastName ?? "").trim();
+          const nameFallback = String(row.name ?? "").trim();
+          const street = String(row.street ?? "").trim();
+          const postalCode = String(row.postalCode ?? "").trim();
+          const city = String(row.city ?? "").trim();
+          const country = String(row.country ?? "").trim();
+          const vatNumber = String(row.vatNumber ?? "").trim();
+          const displayName = companyName || nameFallback || [firstName, lastName].filter(Boolean).join(" ").trim();
+          return {
+            name: displayName || "-",
+            subName: displayName && nameFallback && displayName !== nameFallback ? nameFallback : undefined,
+            street: street || "-",
+            postalCity: [postalCode, city].filter(Boolean).join(" ").trim() || "-",
+            country: country || undefined,
+            vatNumber: vatNumber || "-",
+          } as ExistingCustomer;
+        });
+        setCustomers(mapped);
+      } catch {
+        if (!cancelled) setCustomers([]);
+      }
+    };
+    void loadCustomers();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, customersProp]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -47,6 +88,7 @@ export function ExistingCustomersDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl p-0 overflow-hidden">
+        <DialogTitle className="sr-only">{t("chooseExistingCustomer")}</DialogTitle>
         <div className="flex items-center gap-4 px-5 py-3 border-b border-border bg-muted/30">
           <button
             onClick={() => onOpenChange(false)}

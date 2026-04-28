@@ -108,6 +108,13 @@ export default function App() {
     void fetchPosDeviceGate();
   }, [user, fetchPosDeviceGate]);
 
+  // Ensure register metadata is available in logged-in views (e.g. Control footer).
+  useEffect(() => {
+    if (!user) return;
+    if (deviceCheckInfo?.register?.id || deviceCheckInfo?.register?.name) return;
+    void fetchPosDeviceGate();
+  }, [user, deviceCheckInfo?.register?.id, deviceCheckInfo?.register?.name, fetchPosDeviceGate]);
+
   const setViewAndPersist = useCallback((nextView) => {
     setView(nextView);
     try {
@@ -540,6 +547,9 @@ export default function App() {
     return (
       <ControlView
         currentUser={user}
+        realtimeSocket={socket}
+        currentRegisterId={String(deviceCheckInfo?.register?.id || '').trim()}
+        currentRegisterName={String(deviceCheckInfo?.register?.name || deviceCheckInfo?.register?.id || '').trim()}
         onLogout={handleLogout}
         onBack={() => setViewAndPersist('pos')}
         onFunctionButtonsSaved={fetchSavedFunctionButtonsLayout}

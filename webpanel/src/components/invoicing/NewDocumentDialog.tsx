@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import {
   Save, Calendar as CalendarIcon, User, PlusCircle, Download,
@@ -6,17 +6,22 @@ import {
   Bold, Italic, Underline, Strikethrough, Subscript, Superscript,
   Type, Highlighter, Smile, Brush, Wand2, Pilcrow, AlignLeft, ListOrdered,
   List, Indent, Outdent, Quote, Minus, Link as LinkIcon, Image as ImageIcon,
-  Video, FileText, Table as TableIcon, Undo2, Redo2, Eraser, MousePointer, Code2,
+  Video, FileText, Table as TableIcon, Undo2, Redo2, Eraser, MousePointer, Code2, X, Loader2,
 } from "lucide-react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { cn } from "@/lib/utils";
+import { apiRequest } from "@/lib/api";
+import { getCountryName, getSortedCountryCodes } from "@/lib/countries";
+import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
+import { toast } from "@/hooks/use-toast";
 import { ExistingCustomersDialog, type ExistingCustomer } from "./ExistingCustomersDialog";
 import { AdvanceLoadDialog } from "./AdvanceLoadDialog";
 
@@ -34,10 +39,108 @@ interface LineItem {
   perPieceExcl: number;
   discount: number;
   vat: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+type CatalogProduct = {
+  id: string;
+  name: string;
+  number: number;
+  price: number;
+  stock: string | number | null;
+  vatTakeOut?: string | null;
+};
+
+type CustomerFormState = {
+  companyName: string;
+  name: string;
+  firstName: string;
+  attention: string;
+  street: string;
+  postalCode: string;
+  city: string;
+  country: string;
+  vatNumber: string;
+  phone: string;
+  email: string;
+  paymentTerm: string;
+  deliveryCompany: string;
+  deliveryStreet: string;
+  deliveryPostal: string;
+  deliveryCity: string;
+  deliveryCountry: string;
+  notes: string;
+  creditTag: string;
+  discount: string;
+  priceGroup: string;
+  email2: string;
+  email3: string;
+};
+
+function emptyCustomerForm(): CustomerFormState {
+  return {
+    companyName: "",
+    name: "",
+    firstName: "",
+    attention: "",
+    street: "",
+    postalCode: "",
+    city: "",
+    country: "BE",
+    vatNumber: "",
+    phone: "",
+    email: "",
+    paymentTerm: "0",
+    deliveryCompany: "",
+    deliveryStreet: "",
+    deliveryPostal: "",
+    deliveryCity: "",
+    deliveryCountry: "BE",
+    notes: "",
+    creditTag: "",
+    discount: "",
+    priceGroup: "off",
+    email2: "",
+    email3: "",
+  };
+}
+
+function toNullableTrim(s: string): string | null {
+  const x = s.trim();
+  return x === "" ? null : x;
+}
+
+function buildCustomerPayload(form: CustomerFormState): Record<string, string | null> {
+  const nameResolved =
+    form.name.trim()
+    || form.companyName.trim()
+    || [form.firstName.trim(), form.attention.trim()].filter(Boolean).join(" ").trim();
+  const pg = form.priceGroup.trim();
+  return {
+    companyName: toNullableTrim(form.companyName),
+    firstName: toNullableTrim(form.firstName),
+    lastName: toNullableTrim(form.attention),
+    name: nameResolved,
+    street: toNullableTrim(form.street),
+    postalCode: toNullableTrim(form.postalCode),
+    city: toNullableTrim(form.city),
+    country: (() => {
+      const c = (form.country || "BE").trim().toUpperCase();
+      return c.length >= 2 ? c.slice(0, 2) : "BE";
+    })(),
+    phone: toNullableTrim(form.phone),
+    email: toNullableTrim(form.email),
+    discount: toNullableTrim(form.discount),
+    priceGroup: pg === "" || pg === "off" ? null : pg,
+    vatNumber: toNullableTrim(form.vatNumber),
+    creditTag: toNullableTrim(form.creditTag),
+  };
 }
 
 export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
+  const sortedCountryCodes = useMemo(() => getSortedCountryCodes(lang), [lang]);
 
   const [tab, setTab] = useState<"format" | "attachment">("format");
   const [date, setDate] = useState<Date>(new Date());
@@ -52,11 +155,31 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
   // line entry
   const [qty, setQty] = useState<string>("1");
   const [desc, setDesc] = useState("");
+  const [qtyError, setQtyError] = useState(false);
+  const [descError, setDescError] = useState(false);
   const [totalIncl, setTotalIncl] = useState("");
   const [perIncl, setPerIncl] = useState("");
   const [perExcl, setPerExcl] = useState("");
   const [discount, setDiscount] = useState("");
   const [vat, setVat] = useState("21");
+  const [lastEditedPriceField, setLastEditedPriceField] = useState<"totalIncl" | "perIncl" | "perExcl">("perExcl");
+  const [lastEditedRawValue, setLastEditedRawValue] = useState("");
+  const [savingItem, setSavingItem] = useState(false);
+  const [saveItemError, setSaveItemError] = useState("");
+  const [loadItemsError, setLoadItemsError] = useState("");
+  const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [editingQty, setEditingQty] = useState("");
+  const [editingDesc, setEditingDesc] = useState("");
+  const [editingTotalIncl, setEditingTotalIncl] = useState("");
+  const [editingPerIncl, setEditingPerIncl] = useState("");
+  const [editingPerExcl, setEditingPerExcl] = useState("");
+  const [editingDiscount, setEditingDiscount] = useState("");
+  const [editingVat, setEditingVat] = useState("21");
+  const [editingLastEditedPriceField, setEditingLastEditedPriceField] = useState<"totalIncl" | "perIncl" | "perExcl">("perExcl");
+  const [editingLastEditedRawValue, setEditingLastEditedRawValue] = useState("");
+  const [editingIsNewItem, setEditingIsNewItem] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+  const [resetListConfirmOpen, setResetListConfirmOpen] = useState(false);
   const [items, setItems] = useState<LineItem[]>([]);
 
   // attachment editor
@@ -65,8 +188,19 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
 
   // customer
   const [customersOpen, setCustomersOpen] = useState(false);
+  const [newCustomerOpen, setNewCustomerOpen] = useState(false);
+  const [newCustomerTab, setNewCustomerTab] = useState<"general" | "advanced">("general");
+  const [newCustomerSaving, setNewCustomerSaving] = useState(false);
+  const [newCustomerError, setNewCustomerError] = useState("");
+  const [customerForm, setCustomerForm] = useState<CustomerFormState>(() => emptyCustomerForm());
   const [selectedCustomer, setSelectedCustomer] = useState<ExistingCustomer | null>(null);
   const [advanceOpen, setAdvanceOpen] = useState(false);
+  const [productsOpen, setProductsOpen] = useState(false);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [productsError, setProductsError] = useState("");
+  const [productsSearch, setProductsSearch] = useState("");
+  const [productsVatFilter, setProductsVatFilter] = useState("original");
+  const [products, setProducts] = useState<CatalogProduct[]>([]);
 
   const totals = useMemo(() => {
     const totalInclSum = items.reduce((s, it) => s + it.totalIncl, 0);
@@ -82,9 +216,205 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     };
   }, [items, alreadyPaid]);
 
-  const addItem = () => {
+  const parseVatRate = (value: string | null | undefined) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+    const match = raw.match(/\d+(?:[.,]\d+)?/);
+    if (!match) return null;
+    const parsed = Number(match[0].replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const parseStockQty = (value: string | number | null | undefined) => {
+    if (value == null || value === "") return 0;
+    const parsed = Number(String(value).trim().replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const loadItems = async () => {
+      setLoadItemsError("");
+      try {
+        const response = await apiRequest<{ items: LineItem[] }>("/api/webpanel/invoicing/line-items");
+        if (!cancelled) {
+          setItems(Array.isArray(response?.items) ? response.items : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setLoadItemsError("Failed to load invoicing items from database.");
+        }
+      }
+    };
+    void loadItems();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!productsOpen) return;
+    let cancelled = false;
+    const loadProducts = async () => {
+      setProductsLoading(true);
+      setProductsError("");
+      try {
+        const rows = await apiRequest<Array<Record<string, unknown>>>("/api/products/catalog");
+        if (cancelled) return;
+        const mapped = (Array.isArray(rows) ? rows : []).map((row) => ({
+          id: String(row.id ?? ""),
+          name: String(row.name ?? ""),
+          number: Number(row.number) || 0,
+          price: Number(row.price) || 0,
+          stock: (row.stock as string | number | null | undefined) ?? null,
+          vatTakeOut: row.vatTakeOut == null ? null : String(row.vatTakeOut),
+        })).filter((p) => p.id && p.name);
+        setProducts(mapped);
+      } catch {
+        if (!cancelled) {
+          setProducts([]);
+          setProductsError("Failed to load products.");
+        }
+      } finally {
+        if (!cancelled) setProductsLoading(false);
+      }
+    };
+    void loadProducts();
+    return () => {
+      cancelled = true;
+    };
+  }, [productsOpen]);
+
+  const visibleProducts = useMemo(() => {
+    const q = productsSearch.trim().toLowerCase();
+    return products.filter((p) => {
+      const matchesSearch = !q
+        || p.name.toLowerCase().includes(q)
+        || String(p.number).includes(q);
+      if (!matchesSearch) return false;
+      if (productsVatFilter === "original") return true;
+      const vatRate = parseVatRate(p.vatTakeOut);
+      if (vatRate == null) return false;
+      return Math.abs(vatRate - Number(productsVatFilter)) < 0.001;
+    });
+  }, [products, productsSearch, productsVatFilter]);
+
+  const toNumber = (value: string) => {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const formatMoney = (value: number) => {
+    const rounded = Math.round(value * 100) / 100;
+    return Number.isFinite(rounded) ? `${rounded}` : "";
+  };
+
+  const recalculatePriceFields = (
+    source: "totalIncl" | "perIncl" | "perExcl",
+    sourceValue: string,
+    overrides?: { qty?: string; vat?: string; discount?: string },
+  ) => {
+    const nextQty = toNumber(overrides?.qty ?? qty);
+    const nextVat = toNumber(overrides?.vat ?? vat);
+    const nextDiscount = Math.min(Math.max(toNumber(overrides?.discount ?? discount), 0), 100);
+
+    const vatFactor = 1 + nextVat / 100;
+    const discountFactor = 1 - nextDiscount / 100;
+    const typedValue = toNumber(sourceValue);
+
+    let computedPerExcl = 0;
+    let computedPerIncl = 0;
+    let computedTotalIncl = 0;
+
+    if (source === "totalIncl") {
+      if (nextQty > 0) {
+        const perInclRaw = typedValue / nextQty;
+        const perExclRaw = vatFactor > 0 ? perInclRaw / vatFactor : 0;
+        computedPerExcl = perExclRaw * discountFactor;
+        computedPerIncl = computedPerExcl * vatFactor;
+        computedTotalIncl = computedPerIncl * nextQty;
+      } else {
+        computedTotalIncl = typedValue;
+      }
+    }
+
+    if (source === "perIncl") {
+      const perExclRaw = vatFactor > 0 ? typedValue / vatFactor : 0;
+      computedPerExcl = perExclRaw * discountFactor;
+      computedPerIncl = computedPerExcl * vatFactor;
+      computedTotalIncl = computedPerIncl * nextQty;
+    }
+
+    if (source === "perExcl") {
+      computedPerExcl = typedValue * discountFactor;
+      computedPerIncl = computedPerExcl * vatFactor;
+      computedTotalIncl = computedPerIncl * nextQty;
+    }
+
+    setPerExcl(formatMoney(computedPerExcl));
+    setPerIncl(formatMoney(computedPerIncl));
+    setTotalIncl(formatMoney(computedTotalIncl));
+  };
+
+  const handleTotalInclChange = (value: string) => {
+    setLastEditedPriceField("totalIncl");
+    setLastEditedRawValue(value);
+    setDiscount("");
+    recalculatePriceFields("totalIncl", value, { discount: "0" });
+  };
+
+  const handlePerInclChange = (value: string) => {
+    setLastEditedPriceField("perIncl");
+    setLastEditedRawValue(value);
+    setDiscount("");
+    recalculatePriceFields("perIncl", value, { discount: "0" });
+  };
+
+  const handlePerExclChange = (value: string) => {
+    setLastEditedPriceField("perExcl");
+    setLastEditedRawValue(value);
+    setDiscount("");
+    recalculatePriceFields("perExcl", value, { discount: "0" });
+  };
+
+  const handleQtyChange = (value: string) => {
+    setQty(value);
+    const nextQty = parseFloat(value) || 0;
+    setQtyError(nextQty <= 0);
+    const unitIncl = parseFloat(perIncl) || 0;
+    recalculatePriceFields("perIncl", `${unitIncl}`, { qty: value });
+  };
+
+  const handleDiscountChange = (value: string) => {
+    setDiscount(value);
+    const sourceValue = lastEditedRawValue || (lastEditedPriceField === "totalIncl"
+      ? totalIncl
+      : lastEditedPriceField === "perIncl"
+        ? perIncl
+        : perExcl);
+    recalculatePriceFields(lastEditedPriceField, sourceValue, { discount: value });
+  };
+
+  const handleVatChange = (value: string) => {
+    setVat(value);
+    const sourceValue = lastEditedRawValue || (lastEditedPriceField === "totalIncl"
+      ? totalIncl
+      : lastEditedPriceField === "perIncl"
+        ? perIncl
+        : perExcl);
+    recalculatePriceFields(lastEditedPriceField, sourceValue, { vat: value });
+  };
+
+  const addItem = async () => {
     const q = parseFloat(qty) || 0;
-    if (!q && !desc) return;
+    const hasValidQty = q > 0;
+    const hasDescription = desc.trim().length > 0;
+
+    setQtyError(!hasValidQty);
+    setDescError(!hasDescription);
+    if (!hasValidQty || !hasDescription) return;
+
     const ti = parseFloat(totalIncl) || 0;
     const pi = parseFloat(perIncl) || (q > 0 ? ti / q : 0);
     const pe = parseFloat(perExcl) || pi / (1 + parseFloat(vat) / 100);
@@ -98,13 +428,30 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
       discount: parseFloat(discount) || 0,
       vat: parseFloat(vat) || 0,
     };
-    setItems((prev) => [...prev, newItem]);
+    setSavingItem(true);
+    setSaveItemError("");
+    try {
+      const saved = await apiRequest<LineItem>("/api/webpanel/invoicing/line-items", {
+        method: "POST",
+        body: JSON.stringify(newItem),
+      });
+      setItems((prev) => [...prev, saved]);
+    } catch {
+      setSaveItemError("Failed to save line item to database.");
+      return;
+    } finally {
+      setSavingItem(false);
+    }
+
     setQty("1");
     setDesc("");
+    setQtyError(false);
+    setDescError(false);
     setTotalIncl("");
     setPerIncl("");
     setPerExcl("");
     setDiscount("");
+    setLastEditedRawValue("");
   };
 
   const moveItem = (id: number, dir: -1 | 1) => {
@@ -119,11 +466,272 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     });
   };
 
-  const deleteItem = (id: number) => setItems((prev) => prev.filter((i) => i.id !== id));
+  const deleteItem = async (id: number) => {
+    setSavingItem(true);
+    setSaveItemError("");
+    try {
+      await apiRequest<void>(`/api/webpanel/invoicing/line-items/${id}`, {
+        method: "DELETE",
+      });
+      setItems((prev) => prev.filter((i) => i.id !== id));
+      if (editingItemId === id) setEditingItemId(null);
+    } catch {
+      setSaveItemError("Failed to delete line item.");
+    } finally {
+      setSavingItem(false);
+      setDeleteTargetId(null);
+    }
+  };
 
-  const resetList = () => setItems([]);
+  const resetList = async () => {
+    setSavingItem(true);
+    setSaveItemError("");
+    try {
+      await apiRequest<void>("/api/webpanel/invoicing/line-items", {
+        method: "DELETE",
+      });
+      setItems([]);
+      setEditingItemId(null);
+    } catch {
+      setSaveItemError("Failed to reset list.");
+    } finally {
+      setSavingItem(false);
+    }
+  };
 
-  const handleSave = () => onOpenChange(false);
+  const startEditingItem = (item: LineItem, isNew = false) => {
+    setEditingIsNewItem(isNew);
+    setEditingItemId(item.id);
+    setEditingQty(String(item.qty));
+    setEditingDesc(item.description);
+    setEditingTotalIncl(formatMoney(item.totalIncl));
+    setEditingPerIncl(formatMoney(item.perPieceIncl));
+    setEditingPerExcl(formatMoney(item.perPieceExcl));
+    setEditingDiscount(formatMoney(item.discount));
+    setEditingVat(String(item.vat));
+    setEditingLastEditedPriceField("perExcl");
+    setEditingLastEditedRawValue(formatMoney(item.perPieceExcl));
+    setSaveItemError("");
+  };
+
+  const recalculateEditingPriceFields = (
+    source: "totalIncl" | "perIncl" | "perExcl",
+    sourceValue: string,
+    overrides?: { qty?: string; vat?: string; discount?: string },
+  ) => {
+    const nextQty = toNumber(overrides?.qty ?? editingQty);
+    const nextVat = toNumber(overrides?.vat ?? editingVat);
+    const nextDiscount = Math.min(Math.max(toNumber(overrides?.discount ?? editingDiscount), 0), 100);
+    const vatFactor = 1 + nextVat / 100;
+    const discountFactor = 1 - nextDiscount / 100;
+    const typedValue = toNumber(sourceValue);
+
+    let computedPerExcl = 0;
+    let computedPerIncl = 0;
+    let computedTotalIncl = 0;
+
+    if (source === "totalIncl") {
+      if (nextQty > 0) {
+        const perInclRaw = typedValue / nextQty;
+        const perExclRaw = vatFactor > 0 ? perInclRaw / vatFactor : 0;
+        computedPerExcl = perExclRaw * discountFactor;
+        computedPerIncl = computedPerExcl * vatFactor;
+        computedTotalIncl = computedPerIncl * nextQty;
+      } else {
+        computedTotalIncl = typedValue;
+      }
+    }
+
+    if (source === "perIncl") {
+      const perExclRaw = vatFactor > 0 ? typedValue / vatFactor : 0;
+      computedPerExcl = perExclRaw * discountFactor;
+      computedPerIncl = computedPerExcl * vatFactor;
+      computedTotalIncl = computedPerIncl * nextQty;
+    }
+
+    if (source === "perExcl") {
+      computedPerExcl = typedValue * discountFactor;
+      computedPerIncl = computedPerExcl * vatFactor;
+      computedTotalIncl = computedPerIncl * nextQty;
+    }
+
+    setEditingPerExcl(formatMoney(computedPerExcl));
+    setEditingPerIncl(formatMoney(computedPerIncl));
+    setEditingTotalIncl(formatMoney(computedTotalIncl));
+  };
+
+  const handleEditingTotalInclChange = (value: string) => {
+    setEditingLastEditedPriceField("totalIncl");
+    setEditingLastEditedRawValue(value);
+    setEditingDiscount("");
+    recalculateEditingPriceFields("totalIncl", value, { discount: "0" });
+  };
+
+  const handleEditingPerInclChange = (value: string) => {
+    setEditingLastEditedPriceField("perIncl");
+    setEditingLastEditedRawValue(value);
+    setEditingDiscount("");
+    recalculateEditingPriceFields("perIncl", value, { discount: "0" });
+  };
+
+  const handleEditingPerExclChange = (value: string) => {
+    setEditingLastEditedPriceField("perExcl");
+    setEditingLastEditedRawValue(value);
+    setEditingDiscount("");
+    recalculateEditingPriceFields("perExcl", value, { discount: "0" });
+  };
+
+  const handleEditingQtyChange = (value: string) => {
+    setEditingQty(value);
+    const unitIncl = toNumber(editingPerIncl);
+    recalculateEditingPriceFields("perIncl", `${unitIncl}`, { qty: value });
+  };
+
+  const handleEditingDiscountChange = (value: string) => {
+    setEditingDiscount(value);
+    const sourceValue = editingLastEditedRawValue || (
+      editingLastEditedPriceField === "totalIncl"
+        ? editingTotalIncl
+        : editingLastEditedPriceField === "perIncl"
+          ? editingPerIncl
+          : editingPerExcl
+    );
+    recalculateEditingPriceFields(editingLastEditedPriceField, sourceValue, { discount: value });
+  };
+
+  const handleEditingVatChange = (value: string) => {
+    setEditingVat(value);
+    const sourceValue = editingLastEditedRawValue || (
+      editingLastEditedPriceField === "totalIncl"
+        ? editingTotalIncl
+        : editingLastEditedPriceField === "perIncl"
+          ? editingPerIncl
+          : editingPerExcl
+    );
+    recalculateEditingPriceFields(editingLastEditedPriceField, sourceValue, { vat: value });
+  };
+
+  const saveEditingItem = async () => {
+    if (editingItemId == null) return;
+    const q = parseFloat(editingQty) || 0;
+    const description = editingDesc.trim();
+    if (q <= 0 || !description) {
+      setSaveItemError("Quantity and description are required.");
+      return;
+    }
+
+    const payload: LineItem = {
+      id: editingItemId,
+      qty: q,
+      description,
+      totalIncl: parseFloat(editingTotalIncl) || 0,
+      perPieceIncl: parseFloat(editingPerIncl) || 0,
+      perPieceExcl: parseFloat(editingPerExcl) || 0,
+      discount: parseFloat(editingDiscount) || 0,
+      vat: parseFloat(editingVat) || 0,
+    };
+
+    setSavingItem(true);
+    setSaveItemError("");
+    try {
+      if (editingIsNewItem) {
+        const created = await apiRequest<LineItem>("/api/webpanel/invoicing/line-items", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setItems((prev) => prev.map((it) => (it.id === editingItemId ? created : it)));
+      } else {
+        const updated = await apiRequest<LineItem>(`/api/webpanel/invoicing/line-items/${editingItemId}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+        setItems((prev) => prev.map((it) => (it.id === editingItemId ? updated : it)));
+      }
+      setEditingItemId(null);
+      setEditingIsNewItem(false);
+    } catch {
+      setSaveItemError(editingIsNewItem ? "Failed to save line item." : "Failed to update line item.");
+    } finally {
+      setSavingItem(false);
+    }
+  };
+
+  const handleSave = () => {
+    if (!selectedCustomer) {
+      toast({
+        variant: "destructive",
+        description: t("selectCustomerRequired"),
+      });
+      return;
+    }
+    onOpenChange(false);
+  };
+
+  const resetNewCustomerForm = () => {
+    setCustomerForm(emptyCustomerForm());
+    setNewCustomerTab("general");
+    setNewCustomerError("");
+  };
+
+  const handleCreateCustomer = async () => {
+    const payload = buildCustomerPayload(customerForm);
+    if (!String(payload.name || "").trim()) {
+      setNewCustomerError("Name or company is required.");
+      return;
+    }
+    setNewCustomerSaving(true);
+    setNewCustomerError("");
+    try {
+      const created = await apiRequest<Record<string, unknown>>("/api/customers", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const street = String(created.street ?? "").trim();
+      const postalCode = String(created.postalCode ?? "").trim();
+      const city = String(created.city ?? "").trim();
+      const company = String(created.companyName ?? "").trim();
+      const customerName = String(created.name ?? "").trim();
+      const displayName = company || customerName;
+      setSelectedCustomer({
+        name: displayName || "-",
+        subName: displayName && customerName && displayName !== customerName ? customerName : undefined,
+        street: street || "-",
+        postalCity: [postalCode, city].filter(Boolean).join(" ").trim() || "-",
+        country: String(created.country ?? "").trim() || undefined,
+        vatNumber: String(created.vatNumber ?? "").trim() || "-",
+      });
+      setNewCustomerOpen(false);
+      resetNewCustomerForm();
+    } catch {
+      setNewCustomerError("Failed to create customer.");
+    } finally {
+      setNewCustomerSaving(false);
+    }
+  };
+
+  const applyProductToLine = (product: CatalogProduct) => {
+    const originalVat = parseVatRate(product.vatTakeOut);
+    const nextVat = productsVatFilter === "original"
+      ? (originalVat ?? 21)
+      : (parseFloat(productsVatFilter) || 21);
+    const price = Number(product.price) || 0;
+    const tempId = Date.now();
+    const vatFactor = 1 + nextVat / 100;
+    const perExcl = vatFactor > 0 ? price / vatFactor : price;
+    const draft: LineItem = {
+      id: tempId,
+      qty: 1,
+      description: product.name,
+      totalIncl: price,
+      perPieceIncl: price,
+      perPieceExcl: perExcl,
+      discount: 0,
+      vat: nextVat,
+    };
+    setItems((prev) => [...prev, draft]);
+    startEditingItem(draft, true);
+    setProductsOpen(false);
+  };
 
   // Tab nav
   const TopTabs = (
@@ -174,6 +782,7 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-6xl p-0 overflow-hidden">
+        <DialogTitle className="sr-only">{t("newDocument")}</DialogTitle>
         <div className="bg-muted/40 border-b border-border px-6 pt-5 pb-4">
           {TopTabs}
         </div>
@@ -218,7 +827,6 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                             <SelectTrigger className="h-8 w-44"><SelectValue /></SelectTrigger>
                             <SelectContent>
                               <SelectItem value="standard">{t("docLayoutStandard")}</SelectItem>
-                              <SelectItem value="1">1</SelectItem>
                             </SelectContent>
                           </Select>
                           <Select value={docLang} onValueChange={setDocLang}>
@@ -268,7 +876,7 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                           />
                           <button
                             type="button"
-                            onClick={() => setAlreadyPaid("")}
+                            onClick={() => setAlreadyPaid(totals.total.toFixed(2))}
                             className="text-muted-foreground hover:text-foreground"
                             aria-label="reset"
                           >
@@ -315,7 +923,10 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                         </button>
                       </div>
                       <div className="border-t border-border mt-3 pt-3 flex items-center justify-between text-sm">
-                        <button className="flex items-center gap-1.5 text-foreground hover:text-primary transition-colors">
+                        <button
+                          onClick={() => setNewCustomerOpen(true)}
+                          className="flex items-center gap-1.5 text-foreground hover:text-primary transition-colors"
+                        >
                           <PlusCircle className="h-4 w-4" />
                           {t("newCustomer")}
                         </button>
@@ -337,7 +948,10 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                         <User className="h-5 w-5 text-muted-foreground" />
                         {t("chooseExistingCustomer")}
                       </button>
-                      <button className="flex items-center gap-3 text-sm text-foreground hover:text-primary transition-colors">
+                      <button
+                        onClick={() => setNewCustomerOpen(true)}
+                        className="flex items-center gap-3 text-sm text-foreground hover:text-primary transition-colors"
+                      >
                         <PlusCircle className="h-5 w-5 text-muted-foreground" />
                         {t("createNewCustomerBtn")}
                       </button>
@@ -348,31 +962,47 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
 
               {/* Line entry */}
               <div className="bg-muted/30 rounded-md p-4">
-                <div className="grid grid-cols-[60px_1fr_140px_90px_90px_90px_70px_90px_auto] gap-3 items-end text-xs text-muted-foreground">
+                <div className="grid grid-cols-[60px_160px_200px_100px_90px_90px_70px_90px_auto] gap-3 items-end text-xs text-muted-foreground">
                   <div>{t("quantity")}</div>
                   <div>{t("description")}</div>
-                  <button className="inline-flex items-center gap-1.5 text-foreground/80 hover:text-primary justify-self-start">
+                  <button
+                    type="button"
+                    onClick={() => setProductsOpen(true)}
+                    className="inline-flex items-center gap-1.5 text-foreground/80 hover:text-primary justify-self-start"
+                  >
                     <Download className="h-3.5 w-3.5" /> {t("insertProduct")}
                   </button>
-                  <div className="text-center leading-tight">{t("totalIncl")}<br />btw</div>
+                  <div className="text-center leading-tight">{t("totalInclVat")}</div>
                   <div className="text-center leading-tight">{t("perPieceIncl")}</div>
                   <div className="text-center leading-tight">{t("perPieceExcl")}</div>
                   <div>{t("discount")}</div>
                   <div>{t("vatRate")}</div>
                   <div />
                 </div>
-                <div className="grid grid-cols-[60px_1fr_140px_90px_90px_90px_70px_90px_auto] gap-3 items-center mt-2">
-                  <Input value={qty} onChange={(e) => setQty(e.target.value)} className="h-8 text-center" />
-                  <Input value={desc} onChange={(e) => setDesc(e.target.value)} className="h-8" />
+                <div className="grid grid-cols-[60px_160px_200px_100px_90px_90px_70px_90px_auto] gap-3 items-center mt-2">
+                  <Input
+                    value={qty}
+                    onChange={(e) => handleQtyChange(e.target.value)}
+                    className={cn("h-8 text-center", qtyError && "border-destructive bg-destructive/10")}
+                  />
+                  <Input
+                    value={desc}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setDesc(value);
+                      setDescError(value.trim().length === 0);
+                    }}
+                    className={cn("h-8", descError && "border-destructive bg-destructive/10")}
+                  />
                   <div />
-                  <Input value={totalIncl} onChange={(e) => setTotalIncl(e.target.value)} className="h-8 text-right" />
-                  <Input value={perIncl} onChange={(e) => setPerIncl(e.target.value)} className="h-8 text-right" />
-                  <Input value={perExcl} onChange={(e) => setPerExcl(e.target.value)} className="h-8 text-right" />
+                  <Input value={totalIncl} onChange={(e) => handleTotalInclChange(e.target.value)} className="h-8 text-right" />
+                  <Input value={perIncl} onChange={(e) => handlePerInclChange(e.target.value)} className="h-8 text-right" />
+                  <Input value={perExcl} onChange={(e) => handlePerExclChange(e.target.value)} className="h-8 text-right" />
                   <div className="flex items-center gap-1">
-                    <Input value={discount} onChange={(e) => setDiscount(e.target.value)} className="h-8 text-right" />
+                    <Input value={discount} onChange={(e) => handleDiscountChange(e.target.value)} className="h-8 text-right" />
                     <span className="text-xs text-muted-foreground">%</span>
                   </div>
-                  <Select value={vat} onValueChange={setVat}>
+                  <Select value={vat} onValueChange={handleVatChange}>
                     <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="0">0 %</SelectItem>
@@ -381,10 +1011,19 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                       <SelectItem value="21">21 %</SelectItem>
                     </SelectContent>
                   </Select>
-                  <Button variant="ghost" size="sm" onClick={addItem} className="gap-1.5 text-foreground hover:text-primary">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={addItem}
+                    disabled={savingItem}
+                    className="gap-1.5 text-foreground hover:text-primary"
+                  >
                     <Plus className="h-4 w-4" /> {t("add")}
                   </Button>
                 </div>
+                {saveItemError && (
+                  <div className="mt-2 text-xs text-destructive">{saveItemError}</div>
+                )}
               </div>
 
               {/* Items list */}
@@ -396,41 +1035,80 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                     {items.map((it) => (
                       <div
                         key={it.id}
-                        className="grid grid-cols-[60px_1fr_140px_90px_90px_90px_70px_90px_auto] gap-3 items-center px-3 py-2 text-sm"
+                        className="grid grid-cols-[60px_150px_200px_100px_90px_90px_70px_90px_auto] gap-3 items-center px-3 py-2 text-sm"
                       >
-                        <div className="text-center">{it.qty}</div>
-                        <div className="truncate">{it.description}</div>
-                        <div />
-                        <div className="text-right font-mono">{it.totalIncl.toFixed(2)}</div>
-                        <div className="text-right font-mono">{it.perPieceIncl.toFixed(2)}</div>
-                        <div className="text-right font-mono">{it.perPieceExcl.toFixed(2)}</div>
-                        <div className="text-right">{it.discount.toFixed(2)} %</div>
-                        <div className="text-right">{it.vat} %</div>
-                        <div className="flex items-center gap-1 text-muted-foreground">
-                          <button onClick={() => moveItem(it.id, 1)} className="hover:text-foreground" aria-label="down">
-                            <ArrowDown className="h-4 w-4" />
-                          </button>
-                          <button onClick={() => moveItem(it.id, -1)} className="hover:text-foreground" aria-label="up">
-                            <ArrowUp className="h-4 w-4" />
-                          </button>
-                          <button className="hover:text-primary" aria-label="edit">
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <button onClick={() => deleteItem(it.id)} className="hover:text-destructive" aria-label="delete">
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+                        {editingItemId === it.id ? (
+                          <>
+                            <Input value={editingQty} onChange={(e) => handleEditingQtyChange(e.target.value)} className="h-8 text-center" />
+                            <Input value={editingDesc} onChange={(e) => setEditingDesc(e.target.value)} className="h-8" />
+                            <div />
+                            <Input value={editingTotalIncl} onChange={(e) => handleEditingTotalInclChange(e.target.value)} className="h-8 text-right" />
+                            <Input value={editingPerIncl} onChange={(e) => handleEditingPerInclChange(e.target.value)} className="h-8 text-right" />
+                            <Input value={editingPerExcl} onChange={(e) => handleEditingPerExclChange(e.target.value)} className="h-8 text-right" />
+                            <div className="flex items-center gap-1">
+                              <Input value={editingDiscount} onChange={(e) => handleEditingDiscountChange(e.target.value)} className="h-8 text-right" />
+                              <span className="text-xs text-muted-foreground">%</span>
+                            </div>
+                            <Select value={editingVat} onValueChange={handleEditingVatChange}>
+                              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="0">0 %</SelectItem>
+                                <SelectItem value="6">6 %</SelectItem>
+                                <SelectItem value="12">12 %</SelectItem>
+                                <SelectItem value="21">21 %</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <div className="flex items-center justify-center text-muted-foreground">
+                              <button
+                                onClick={saveEditingItem}
+                                className="hover:text-primary"
+                                aria-label="save edit"
+                                disabled={savingItem}
+                              >
+                                <Save className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-center">{it.qty}</div>
+                            <div className="truncate">{it.description}</div>
+                            <div />
+                            <div className="text-right font-mono">{it.totalIncl.toFixed(2)}</div>
+                            <div className="text-right font-mono">{it.perPieceIncl.toFixed(2)}</div>
+                            <div className="text-right font-mono">{it.perPieceExcl.toFixed(2)}</div>
+                            <div className="text-right">{it.discount.toFixed(2)} %</div>
+                            <div className="text-right">{it.vat} %</div>
+                            <div className="flex items-center gap-3 pl-5 text-muted-foreground">
+                              <button onClick={() => moveItem(it.id, 1)} className="hover:text-foreground" aria-label="down">
+                                <ArrowDown className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => moveItem(it.id, -1)} className="hover:text-foreground" aria-label="up">
+                                <ArrowUp className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => startEditingItem(it)} className="hover:text-primary" aria-label="edit">
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                              <button onClick={() => setDeleteTargetId(it.id)} className="hover:text-destructive" aria-label="delete">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
               </div>
+              {loadItemsError && (
+                <div className="text-xs text-destructive">{loadItemsError}</div>
+              )}
 
               {/* Footer actions + totals */}
               <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
                 <div className="space-y-4">
                   <div className="flex items-center gap-8 text-sm">
-                    <button onClick={resetList} className="inline-flex items-center gap-1.5 text-foreground hover:text-primary">
+                    <button onClick={() => setResetListConfirmOpen(true)} className="inline-flex items-center gap-1.5 text-foreground hover:text-primary">
                       <RotateCcw className="h-4 w-4" /> {t("resetList")}
                     </button>
                     <button className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
@@ -520,7 +1198,282 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
         onOpenChange={setCustomersOpen}
         onSelect={setSelectedCustomer}
       />
+      <Dialog open={newCustomerOpen} onOpenChange={(nextOpen) => {
+        setNewCustomerOpen(nextOpen);
+        if (!nextOpen) resetNewCustomerForm();
+      }}>
+        <DialogContent className="max-w-xl p-0 overflow-hidden [&>button:last-child]:hidden">
+          <DialogTitle className="sr-only">{t("createNewCustomerBtn")}</DialogTitle>
+          <DialogDescription className="sr-only">{t("customerData")}</DialogDescription>
+          <div className="flex items-center justify-center gap-16 border-b border-border px-6 pt-5 pb-3 relative">
+            <button
+              type="button"
+              onClick={() => setNewCustomerTab("general")}
+              className={cn(
+                "text-sm font-medium pb-2 -mb-3 border-b-2 transition-colors",
+                newCustomerTab === "general" ? "text-primary border-primary" : "text-muted-foreground border-transparent hover:text-foreground"
+              )}
+            >
+              {t("general")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setNewCustomerTab("advanced")}
+              className={cn(
+                "text-sm font-medium pb-2 -mb-3 border-b-2 transition-colors",
+                newCustomerTab === "advanced" ? "text-primary border-primary" : "text-muted-foreground border-transparent hover:text-foreground"
+              )}
+            >
+              {t("advanced")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setNewCustomerOpen(false)}
+              className="absolute right-4 top-4 text-muted-foreground hover:text-foreground"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="max-h-[70vh] overflow-y-auto px-8 py-6">
+            {newCustomerTab === "general" ? (
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground">{t("customerData")} :</h3>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("companyNameLabel")} :</Label>
+                  <Input className="h-9" value={customerForm.companyName} onChange={(e) => setCustomerForm((p) => ({ ...p, companyName: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("name")} :</Label>
+                  <Input className="h-9" value={customerForm.name} onChange={(e) => setCustomerForm((p) => ({ ...p, name: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("firstName")} :</Label>
+                  <Input className="h-9" value={customerForm.firstName} onChange={(e) => setCustomerForm((p) => ({ ...p, firstName: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("attentionOf")} :</Label>
+                  <Input className="h-9" value={customerForm.attention} onChange={(e) => setCustomerForm((p) => ({ ...p, attention: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("streetAndNr")} :</Label>
+                  <Input className="h-9" value={customerForm.street} onChange={(e) => setCustomerForm((p) => ({ ...p, street: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("postcode")} :</Label>
+                  <Input className="h-9 w-32" value={customerForm.postalCode} onChange={(e) => setCustomerForm((p) => ({ ...p, postalCode: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("cityLabel")} :</Label>
+                  <Input className="h-9" value={customerForm.city} onChange={(e) => setCustomerForm((p) => ({ ...p, city: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("country")} :</Label>
+                  <Select value={customerForm.country} onValueChange={(v) => setCustomerForm((p) => ({ ...p, country: v }))}>
+                    <SelectTrigger className="h-9"><SelectValue placeholder="" /></SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {sortedCountryCodes.map((code) => (
+                        <SelectItem key={code} value={code}>{getCountryName(code, lang)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("vatNumber")} :</Label>
+                  <Input className="h-9" value={customerForm.vatNumber} onChange={(e) => setCustomerForm((p) => ({ ...p, vatNumber: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("phone")} :</Label>
+                  <Input className="h-9" value={customerForm.phone} onChange={(e) => setCustomerForm((p) => ({ ...p, phone: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("email")} :</Label>
+                  <Input className="h-9" value={customerForm.email} onChange={(e) => setCustomerForm((p) => ({ ...p, email: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("paymentTerm")} :</Label>
+                  <Select value={customerForm.paymentTerm} onValueChange={(v) => setCustomerForm((p) => ({ ...p, paymentTerm: v }))}>
+                    <SelectTrigger className="h-9 w-32"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">{t("immediate")}</SelectItem>
+                      <SelectItem value="3">{t("days3")}</SelectItem>
+                      <SelectItem value="7">{t("days7")}</SelectItem>
+                      <SelectItem value="14">{t("days14")}</SelectItem>
+                      <SelectItem value="21">{t("days21")}</SelectItem>
+                      <SelectItem value="30">{t("days30")}</SelectItem>
+                      <SelectItem value="60">{t("days60")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between pt-4">
+                  <h3 className="text-sm font-semibold text-foreground">{t("deliveryAddress")} :</h3>
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                    onClick={() => setCustomerForm((p) => ({
+                      ...p,
+                      deliveryCompany: p.companyName,
+                      deliveryStreet: p.street,
+                      deliveryPostal: p.postalCode,
+                      deliveryCity: p.city,
+                      deliveryCountry: p.country,
+                    }))}
+                  >
+                    <ArrowDown className="h-3 w-3" /> {t("resetData")}
+                  </button>
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("companyNameLabel")} :</Label>
+                  <Input className="h-9" value={customerForm.deliveryCompany} onChange={(e) => setCustomerForm((p) => ({ ...p, deliveryCompany: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("streetAndNr")} :</Label>
+                  <Input className="h-9" value={customerForm.deliveryStreet} onChange={(e) => setCustomerForm((p) => ({ ...p, deliveryStreet: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("postcode")} :</Label>
+                  <Input className="h-9 w-32" value={customerForm.deliveryPostal} onChange={(e) => setCustomerForm((p) => ({ ...p, deliveryPostal: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("cityLabel")} :</Label>
+                  <Input className="h-9" value={customerForm.deliveryCity} onChange={(e) => setCustomerForm((p) => ({ ...p, deliveryCity: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("country")} :</Label>
+                  <Select value={customerForm.deliveryCountry} onValueChange={(v) => setCustomerForm((p) => ({ ...p, deliveryCountry: v }))}>
+                    <SelectTrigger className="h-9"><SelectValue placeholder="" /></SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {sortedCountryCodes.map((code) => (
+                        <SelectItem key={code} value={code}>{getCountryName(code, lang)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-foreground">{t("customerData")} :</h3>
+                <div className="grid grid-cols-[140px_1fr] items-start gap-3">
+                  <Label className="text-sm pt-2">{t("notes")} :</Label>
+                  <Textarea rows={3} value={customerForm.notes} onChange={(e) => setCustomerForm((p) => ({ ...p, notes: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("creditTag")} :</Label>
+                  <Input className="h-9" value={customerForm.creditTag} onChange={(e) => setCustomerForm((p) => ({ ...p, creditTag: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("discountPercent")} :</Label>
+                  <Input className="h-9" value={customerForm.discount} onChange={(e) => setCustomerForm((p) => ({ ...p, discount: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("priceGroupLabel")} :</Label>
+                  <Input className="h-9" value={customerForm.priceGroup === "off" ? "" : customerForm.priceGroup} onChange={(e) => setCustomerForm((p) => ({ ...p, priceGroup: e.target.value || "off" }))} />
+                </div>
+                <div className="pt-3 grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("email2")} :</Label>
+                  <Input className="h-9" value={customerForm.email2} onChange={(e) => setCustomerForm((p) => ({ ...p, email2: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-[140px_1fr] items-center gap-3">
+                  <Label className="text-sm">{t("email3")} :</Label>
+                  <Input className="h-9" value={customerForm.email3} onChange={(e) => setCustomerForm((p) => ({ ...p, email3: e.target.value }))} />
+                </div>
+              </div>
+            )}
+            {newCustomerError && <div className="text-xs text-destructive mt-3">{newCustomerError}</div>}
+          </div>
+
+          <div className="flex justify-center pb-6 border-t border-border pt-4">
+            <Button variant="ghost" size="sm" className="gap-2" disabled={newCustomerSaving} onClick={() => void handleCreateCustomer()}>
+              {newCustomerSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {t("save")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <AdvanceLoadDialog open={advanceOpen} onOpenChange={setAdvanceOpen} />
+      <DeleteConfirmDialog
+        open={deleteTargetId != null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setDeleteTargetId(null);
+        }}
+        onConfirm={() => {
+          if (deleteTargetId != null) void deleteItem(deleteTargetId);
+        }}
+      />
+      <DeleteConfirmDialog
+        open={resetListConfirmOpen}
+        onOpenChange={setResetListConfirmOpen}
+        onConfirm={() => {
+          void resetList();
+          setResetListConfirmOpen(false);
+        }}
+      />
+      <Dialog open={productsOpen} onOpenChange={setProductsOpen}>
+        <DialogContent className="max-w-4xl p-0 overflow-hidden [&>button:last-child]:hidden">
+          <DialogTitle className="sr-only">{t("insertProduct")}</DialogTitle>
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/30">
+            <Input
+              value={productsSearch}
+              onChange={(e) => setProductsSearch(e.target.value)}
+              placeholder={t("search")}
+              className="h-9 max-w-[260px]"
+            />
+            <Select value={productsVatFilter} onValueChange={setProductsVatFilter}>
+              <SelectTrigger className="h-9 w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="original">{t("vatOriginal")}</SelectItem>
+                <SelectItem value="0">{t("vatOption0")}</SelectItem>
+                <SelectItem value="6">{t("vatOption6")}</SelectItem>
+                <SelectItem value="12">{t("vatOption12")}</SelectItem>
+                <SelectItem value="21">{t("vatOption21")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              onClick={() => setProductsOpen(false)}
+              className="ml-auto text-muted-foreground hover:text-foreground"
+              aria-label="close products"
+            >
+              <X className="h-6 w-6" />
+            </button>
+          </div>
+          <div className="max-h-[70vh] overflow-y-auto">
+            <div className="grid grid-cols-[90px_1.8fr_120px_120px] gap-4 px-6 py-3 text-sm font-semibold border-b border-border">
+              <div>PLU</div>
+              <div>{t("name")}</div>
+              <div>{t("price")}</div>
+              <div>{t("stock")}</div>
+            </div>
+            {productsLoading ? (
+              <div className="px-6 py-6 text-sm text-muted-foreground">Loading products...</div>
+            ) : productsError ? (
+              <div className="px-6 py-6 text-sm text-destructive">{productsError}</div>
+            ) : (
+              <div className="divide-y divide-border">
+                {visibleProducts.map((product) => (
+                  <button
+                    key={product.id}
+                    type="button"
+                    onClick={() => applyProductToLine(product)}
+                    className="w-full text-left grid grid-cols-[90px_1.8fr_120px_120px] gap-4 px-6 py-2 text-sm hover:bg-muted/40 transition-colors"
+                  >
+                    <div>{product.number}</div>
+                    <div>{product.name}</div>
+                    <div>{product.price.toFixed(2)}</div>
+                    <div>{parseStockQty(product.stock)}</div>
+                  </button>
+                ))}
+                {visibleProducts.length === 0 && (
+                  <div className="px-6 py-6 text-sm text-muted-foreground">No products found.</div>
+                )}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

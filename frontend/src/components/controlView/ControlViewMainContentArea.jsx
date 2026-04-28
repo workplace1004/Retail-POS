@@ -113,6 +113,9 @@ export function ControlViewMainContentArea({ ctx }) {
     categoriesListRef,
     categoriesLoading,
     controlSidebarId,
+    currentRegisterId,
+    currentRegisterName,
+    realtimeSocket,
     currentUser,
     creditCardType,
     discounts,
@@ -345,6 +348,7 @@ export function ControlViewMainContentArea({ ctx }) {
     setProdTicketsSpaceAbove,
     setProdTicketsTicketTearable,
     setProductSearch,
+    setReportSetting,
     setReportGenerateUntil,
     setReportTabId,
     setFinancialReportKind,
@@ -414,7 +418,12 @@ export function ControlViewMainContentArea({ ctx }) {
     try {
       const [period, xdata] = await Promise.all([
         fetchFinancialPeriod(),
-        fetchFinancialXReport({ lang: appLanguage, userName: reportUserName, storeName: '' }),
+        fetchFinancialXReport({
+          lang: appLanguage,
+          userName: reportUserName,
+          storeName: '',
+          reportSettings,
+        }),
       ]);
       setFinancialPeriod(period);
       setFinancialLive(xdata);
@@ -424,7 +433,7 @@ export function ControlViewMainContentArea({ ctx }) {
     } finally {
       setFinancialRefreshing(false);
     }
-  }, [appLanguage, reportUserName]);
+  }, [appLanguage, reportUserName, reportSettings]);
 
   useEffect(() => {
     if (controlSidebarId !== 'reports' || reportTabId !== 'financial') return undefined;
@@ -458,6 +467,29 @@ export function ControlViewMainContentArea({ ctx }) {
     };
   }, [controlSidebarId, reportTabId, financialReportKind, loadFinancialLive]);
 
+  useEffect(() => {
+    if (!realtimeSocket?.on) return undefined;
+    const handleZReportsChanged = () => {
+      if (controlSidebarId !== 'reports' || reportTabId !== 'financial') return;
+      if (financialReportKind === 'history') {
+        setFinancialRefreshing(true);
+        fetchZReportHistory(80)
+          .then((rows) => setZHistoryList(rows))
+          .catch((e) => {
+            setZHistoryList([]);
+            setFinancialLoadError(e?.message || 'Failed to load history');
+          })
+          .finally(() => setFinancialRefreshing(false));
+        return;
+      }
+      void loadFinancialLive();
+    };
+    realtimeSocket.on('z-reports:changed', handleZReportsChanged);
+    return () => {
+      realtimeSocket.off('z-reports:changed', handleZReportsChanged);
+    };
+  }, [realtimeSocket, controlSidebarId, reportTabId, financialReportKind, loadFinancialLive]);
+
   const confirmZCloseAndPrint = useCallback(async () => {
     setShowZCloseConfirm(false);
     if ((Number(financialLive?.summary?.grossTotal) || 0) <= 0) {
@@ -475,6 +507,9 @@ export function ControlViewMainContentArea({ ctx }) {
         storeName: '',
         closedByName: reportUserName,
         closedByUserId: currentUser?.id != null ? String(currentUser.id) : null,
+        registerId: String(currentRegisterId || '').trim() || null,
+        registerName: String(currentRegisterName || '').trim() || null,
+        reportSettings,
       });
       await printPeriodicReportLines(data.lines);
       await loadFinancialLive();
@@ -489,9 +524,12 @@ export function ControlViewMainContentArea({ ctx }) {
     reportPrintBusy,
     appLanguage,
     reportUserName,
+    currentRegisterId,
+    currentRegisterName,
     currentUser,
     financialLive,
     loadFinancialLive,
+    reportSettings,
     tr,
   ]);
 

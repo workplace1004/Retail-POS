@@ -1,4 +1,5 @@
 import { POS_API_PREFIX } from './apiOrigin.js';
+import { posTerminalAuthHeaders } from './posTerminalSession.js';
 
 function buildQuery(params) {
   const q = new URLSearchParams();
@@ -18,9 +19,14 @@ export async function fetchFinancialPeriod() {
 }
 
 /** X report — read-only snapshot; does not close the period. */
-export async function fetchFinancialXReport({ lang, userName, storeName } = {}) {
+export async function fetchFinancialXReport({ lang, userName, storeName, reportSettings } = {}) {
   const res = await fetch(
-    `${POS_API_PREFIX}/reports/financial/x${buildQuery({ lang, userName, storeName })}`,
+    `${POS_API_PREFIX}/reports/financial/x${buildQuery({
+      lang,
+      userName,
+      storeName,
+      reportSettings: reportSettings ? JSON.stringify(reportSettings) : '',
+    })}`,
     { cache: 'no-store' },
   );
   const data = await res.json().catch(() => ({}));
@@ -29,11 +35,29 @@ export async function fetchFinancialXReport({ lang, userName, storeName } = {}) 
 }
 
 /** Z report — closes period, archives report, increments Z number. */
-export async function closeFinancialZReport({ lang, userName, storeName, closedByName, closedByUserId } = {}) {
+export async function closeFinancialZReport({
+  lang,
+  userName,
+  storeName,
+  closedByName,
+  closedByUserId,
+  registerId,
+  registerName,
+  reportSettings,
+} = {}) {
   const res = await fetch(`${POS_API_PREFIX}/reports/financial/z/close`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lang, userName, storeName, closedByName, closedByUserId }),
+    headers: { 'Content-Type': 'application/json', ...posTerminalAuthHeaders() },
+    body: JSON.stringify({
+      lang,
+      userName,
+      storeName,
+      closedByName,
+      closedByUserId,
+      registerId,
+      registerName,
+      reportSettings,
+    }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || 'Failed to close Z report');

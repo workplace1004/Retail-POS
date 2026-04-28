@@ -233,10 +233,16 @@ export function buildPeriodicReportReceiptLines(opts) {
     lang = 'en',
     userName = '',
     storeName = '',
+    reportSettings = null,
   } = opts;
 
   const L = labels(lang);
   const lines = [];
+  const sectionEnabled = (rowId) => {
+    const row = reportSettings && typeof reportSettings === 'object' ? reportSettings[rowId] : null;
+    if (!row || typeof row !== 'object') return true;
+    return row.periodic !== false;
+  };
 
   const title = storeName.trim() || 'POS';
   lines.push(center(title));
@@ -267,10 +273,12 @@ export function buildPeriodicReportReceiptLines(opts) {
   let sumBtw = 0;
   let sumBruto = 0;
 
-  lines.push(center(L.btwPerTarief));
-  lines.push(
-    `${padL(L.mvhNs, 9)} ${padL(L.mvhNr, 9)} ${padL(L.btw, 9)} ${padL(L.total, 11)}`.slice(0, WIDTH),
-  );
+  if (sectionEnabled('vat-totals')) {
+    lines.push(center(L.btwPerTarief));
+    lines.push(
+      `${padL(L.mvhNs, 9)} ${padL(L.mvhNr, 9)} ${padL(L.btw, 9)} ${padL(L.total, 11)}`.slice(0, WIDTH),
+    );
+  }
 
   const sortedRates = [...vatMap.keys()].sort((a, b) => {
     if (a === '—') return 1;
@@ -285,18 +293,22 @@ export function buildPeriodicReportReceiptLines(opts) {
     sumBtw += row.btw;
     sumBruto += row.totaal;
     const lab = key === '—' ? L.rateUnknown : `${key}%`;
-    lines.push(
-      `${padR(lab.slice(0, 11), 11)}${padL(fmtMoney(row.mvhNs), 7)} ${padL(fmtMoney(row.mvhNr), 7)} ${padL(fmtMoney(row.btw), 7)} ${padL(fmtMoney(row.totaal), 7)}`.slice(
-        0,
-        WIDTH,
-      ),
-    );
+    if (sectionEnabled('vat-totals')) {
+      lines.push(
+        `${padR(lab.slice(0, 11), 11)}${padL(fmtMoney(row.mvhNs), 7)} ${padL(fmtMoney(row.mvhNr), 7)} ${padL(fmtMoney(row.btw), 7)} ${padL(fmtMoney(row.totaal), 7)}`.slice(
+          0,
+          WIDTH,
+        ),
+      );
+    }
   }
 
-  lines.push(
-    `${padR(L.total, 11)}${padL(fmtMoney(sumMvhNs), 7)} ${padL(fmtMoney(sumMvhNr), 7)} ${padL(fmtMoney(sumBtw), 7)} ${padL(fmtMoney(sumBruto), 7)}`.slice(0, WIDTH),
-  );
-  lines.push(dashLine());
+  if (sectionEnabled('vat-totals')) {
+    lines.push(
+      `${padR(L.total, 11)}${padL(fmtMoney(sumMvhNs), 7)} ${padL(fmtMoney(sumMvhNr), 7)} ${padL(fmtMoney(sumBtw), 7)} ${padL(fmtMoney(sumBruto), 7)}`.slice(0, WIDTH),
+    );
+    lines.push(dashLine());
+  }
 
   // --- Payments ---
   const payMap = new Map();
@@ -314,15 +326,17 @@ export function buildPeriodicReportReceiptLines(opts) {
   let payTotal = 0;
   for (const v of payMap.values()) payTotal += v;
 
-  lines.push(center(L.payments));
-  lines.push(dashLine());
-  [...payMap.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .forEach(([k, v]) => {
-      lines.push(lineLR(` ${k}`, fmtMoney(v)));
-    });
-  lines.push(lineLR(L.total, fmtMoney(payTotal)));
-  lines.push(dashLine());
+  if (sectionEnabled('payments')) {
+    lines.push(center(L.payments));
+    lines.push(dashLine());
+    [...payMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([k, v]) => {
+        lines.push(lineLR(` ${k}`, fmtMoney(v)));
+      });
+    lines.push(lineLR(L.total, fmtMoney(payTotal)));
+    lines.push(dashLine());
+  }
 
   // --- Eat-in / take-out ---
   let eatInTot = 0;
@@ -341,12 +355,14 @@ export function buildPeriodicReportReceiptLines(opts) {
   }
   const eatGrand = eatInTot + takeTot;
 
-  lines.push(center(L.eatInTakeOut));
-  lines.push(dashLine());
-  lines.push(lineLR(L.total, fmtMoney(eatGrand)));
-  lines.push(lineIndentedLR(2, L.ns, fmtMoney(eatInTot)));
-  lines.push(lineIndentedLR(2, L.nr, fmtMoney(takeTot)));
-  lines.push(dashLine());
+  if (sectionEnabled('eat-in-take-out')) {
+    lines.push(center(L.eatInTakeOut));
+    lines.push(dashLine());
+    lines.push(lineLR(L.total, fmtMoney(eatGrand)));
+    lines.push(lineIndentedLR(2, L.ns, fmtMoney(eatInTot)));
+    lines.push(lineIndentedLR(2, L.nr, fmtMoney(takeTot)));
+    lines.push(dashLine());
+  }
 
   // --- Ticket types & stats ---
   const orderCount = orders.length;
@@ -365,28 +381,30 @@ export function buildPeriodicReportReceiptLines(opts) {
     .filter((o) => String(o.source || '') === 'weborder')
     .reduce((s, o) => s + (Number(o.total) || 0), 0);
 
-  lines.push(lineLR(L.total, fmtMoney(sumBruto)));
-  lines.push(dashLine());
-  lines.push(center(L.ticketTypes));
-  lines.push(dashLine());
-  lines.push(lineLR(L.total, fmtMoney(sumBruto)));
-  lines.push(lineLR(L.issuedVatTickets, fmtInt(orderCount)));
-  lines.push(lineIndentedLR(2, L.ns, fmtInt(eatInCnt)));
-  lines.push(lineIndentedLR(2, L.nr, fmtInt(takeCnt)));
-  lines.push(lineLR(L.returnsCount, fmtInt(0)));
-  lines.push(lineLR(L.drawerNoSale, fmtInt(0)));
-  lines.push(lineLR(L.proFormaTickets, fmtInt(0)));
-  lines.push(lineLR(L.proFormaReturns, fmtInt(0)));
-  lines.push(lineLR(L.proFormaTurnover, fmtMoney(0)));
-  lines.push(lineLR(L.giftSold, fmtInt(giftCount)));
-  lines.push(lineLR(L.giftValue, fmtMoney(giftAmount)));
-  lines.push(lineLR(L.discountsGranted, fmtInt(0)));
-  lines.push(lineLR(L.discountTotal, fmtMoney(0)));
-  lines.push(lineLR(L.cashRounding, fmtMoney(0)));
-  lines.push(lineLR(L.creditTopUp, fmtMoney(0)));
-  lines.push(lineLR(L.staffUse, fmtMoney(0)));
-  lines.push(lineLR(L.onlineRefundCash, fmtMoney(0)));
-  lines.push(lineLR(L.onlineOrders, fmtMoney(webTurnover)));
+  if (sectionEnabled('ticket-types')) {
+    lines.push(lineLR(L.total, fmtMoney(sumBruto)));
+    lines.push(dashLine());
+    lines.push(center(L.ticketTypes));
+    lines.push(dashLine());
+    lines.push(lineLR(L.total, fmtMoney(sumBruto)));
+    lines.push(lineLR(L.issuedVatTickets, fmtInt(orderCount)));
+    lines.push(lineIndentedLR(2, L.ns, fmtInt(eatInCnt)));
+    lines.push(lineIndentedLR(2, L.nr, fmtInt(takeCnt)));
+    lines.push(lineLR(L.returnsCount, fmtInt(0)));
+    lines.push(lineLR(L.drawerNoSale, fmtInt(0)));
+    lines.push(lineLR(L.proFormaTickets, fmtInt(0)));
+    lines.push(lineLR(L.proFormaReturns, fmtInt(0)));
+    lines.push(lineLR(L.proFormaTurnover, fmtMoney(0)));
+    lines.push(lineLR(L.giftSold, fmtInt(giftCount)));
+    lines.push(lineLR(L.giftValue, fmtMoney(giftAmount)));
+    lines.push(lineLR(L.discountsGranted, fmtInt(0)));
+    lines.push(lineLR(L.discountTotal, fmtMoney(0)));
+    lines.push(lineLR(L.cashRounding, fmtMoney(0)));
+    lines.push(lineLR(L.creditTopUp, fmtMoney(0)));
+    lines.push(lineLR(L.staffUse, fmtMoney(0)));
+    lines.push(lineLR(L.onlineRefundCash, fmtMoney(0)));
+    lines.push(lineLR(L.onlineOrders, fmtMoney(webTurnover)));
+  }
 
   return lines;
 }
