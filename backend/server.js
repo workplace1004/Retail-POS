@@ -3679,10 +3679,19 @@ app.post('/api/webpanel/reports/z-preview', async (req, res) => {
     ) {
       queryEndExclusive = new Date(now);
     }
+    const registerFilter = registerId
+      ? {
+          OR: [
+            { posRegisterId: registerId },
+            { posRegister: { name: registerId } },
+          ],
+        }
+      : {};
+
     const where = {
       status: 'paid',
       updatedAt: { gte: queryStart, lt: queryEndExclusive },
-      ...(registerId ? { posRegisterId: registerId } : {}),
+      ...registerFilter,
     };
     const orders = await prisma.order.findMany({
       where,
@@ -4034,6 +4043,8 @@ app.post('/api/webpanel/reports/z-save', async (req, res) => {
     const closedByUserId = sanitizeReportQueryParam(req.body?.closedByUserId, 64) || null;
     const periodStartRaw = String(req.body?.periodStart || '').trim();
     const periodEndRaw = String(req.body?.periodEnd || '').trim();
+    const registerId = sanitizeReportQueryParam(req.body?.registerId, 64) || null;
+    const registerName = sanitizeReportQueryParam(req.body?.registerName, 120) || null;
     const periodStart = Number.isNaN(new Date(periodStartRaw).getTime()) ? new Date() : new Date(periodStartRaw);
     const periodEnd = Number.isNaN(new Date(periodEndRaw).getTime()) ? new Date() : new Date(periodEndRaw);
 
@@ -4045,6 +4056,8 @@ app.post('/api/webpanel/reports/z-save', async (req, res) => {
         lines,
         periodStart: periodStart.toISOString(),
         periodEnd: periodEnd.toISOString(),
+        registerId,
+        registerName,
         closedAt: new Date().toISOString(),
       };
       await tx.zReport.create({
@@ -4146,9 +4159,11 @@ app.get('/api/reports/financial/z/history', async (req, res) => {
     res.json(
       rows.map((r) => {
         let grossTotal = null;
+        let registerName = null;
         try {
           const j = JSON.parse(r.summaryJson || '{}');
           grossTotal = j.grossTotal != null ? j.grossTotal : null;
+          registerName = j.registerName != null ? String(j.registerName || '').trim() || null : null;
         } catch {
           /* ignore */
         }
@@ -4160,6 +4175,7 @@ app.get('/api/reports/financial/z/history', async (req, res) => {
           closedByName: r.closedByName,
           createdAt: r.createdAt.toISOString(),
           grossTotal,
+          registerName,
         };
       }),
     );

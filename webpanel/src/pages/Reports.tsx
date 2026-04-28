@@ -459,6 +459,16 @@ type ZPreviewPayload = {
   nextZNumber?: number;
   orderCount?: number;
 };
+type ZHistoryRow = {
+  id: string;
+  zNumber: number;
+  periodStart: string;
+  periodEnd: string;
+  registerName?: string | null;
+  closedByName?: string | null;
+  createdAt?: string;
+  grossTotal?: number | null;
+};
 
 type EmptiesTotals = { out: number; in: number; diff: number };
 type EmptiesRow = { label: string; out: number; in: number; diff: number };
@@ -746,6 +756,11 @@ const Reports = () => {
   const [zReportSaved, setZReportSaved] = useState(false);
   const [zPdfWorking, setZPdfWorking] = useState(false);
   const zPdfLockRef = useRef(false);
+  const [zHistoryRows, setZHistoryRows] = useState<ZHistoryRow[]>([]);
+  const [zHistoryReportId, setZHistoryReportId] = useState("");
+  const [zHistoryMonth, setZHistoryMonth] = useState(String(new Date().getMonth() + 1).padStart(2, "0"));
+  const [zHistoryYear, setZHistoryYear] = useState(String(new Date().getFullYear()));
+  const [zHistoryLoading, setZHistoryLoading] = useState(false);
   const [reportSectionVisibility, setReportSectionVisibility] = useState<Record<ReportSectionVisibilityKey, boolean>>({
     categoryTotals: false,
     productTotals: false,
@@ -986,6 +1001,48 @@ const Reports = () => {
     }
   }, [dailyAutoCreateEmail, dailyAutoCreateEnabled, dailyAutoCreateHour, reportSectionVisibility, t]);
 
+  const loadZHistoryRows = useCallback(async () => {
+    setZHistoryLoading(true);
+    try {
+      const rows = await apiRequest<ZHistoryRow[]>("/api/reports/financial/z/history?limit=200");
+      const list = Array.isArray(rows) ? rows : [];
+      setZHistoryRows(list);
+      setZHistoryReportId((prev) => (prev && list.some((r) => r.id === prev) ? prev : list[0]?.id || ""));
+    } catch (e) {
+      setZHistoryRows([]);
+      setZHistoryReportId("");
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to load Z report history.",
+      });
+    } finally {
+      setZHistoryLoading(false);
+    }
+  }, []);
+
+  const openSelectedZHistoryReport = useCallback(async () => {
+    if (!zHistoryReportId) return;
+    try {
+      const data = await apiRequest<{ lines?: string[]; periodStart?: string; periodEnd?: string; zNumber?: number }>(
+        `/api/reports/financial/z/${encodeURIComponent(zHistoryReportId)}/receipt`,
+      );
+      setZPreviewPayload({
+        lines: Array.isArray(data?.lines) ? data.lines : [],
+        periodStart: String(data?.periodStart ?? ""),
+        periodEnd: String(data?.periodEnd ?? ""),
+        nextZNumber: Number(data?.zNumber) || undefined,
+        orderCount: 0,
+      });
+      setZReportSaved(true);
+      setZPreviewOpen(true);
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to load Z report.",
+      });
+    }
+  }, [zHistoryReportId]);
+
   useEffect(() => {
     void loadReportUsers();
     void loadReportSuppliers();
@@ -1038,6 +1095,33 @@ const Reports = () => {
       </>
     ),
     [reportRegisters],
+  );
+  const zHistoryFilteredRows = useMemo(
+    () =>
+      zHistoryRows.filter((r) => {
+        const d = new Date(r.periodEnd || r.createdAt || "");
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const y = String(d.getFullYear());
+        if (!(m === zHistoryMonth && y === zHistoryYear)) return false;
+        if (reportRegisterFilter === "all") return true;
+        const selectedRegisterName =
+          reportRegisters.find((x) => x.id === reportRegisterFilter)?.name?.trim().toLowerCase() || reportRegisterFilter.trim().toLowerCase();
+        const rowRegisterName = String(r.registerName || "").trim().toLowerCase();
+        // Match by exact register name when available; also allow id fallback.
+        if (rowRegisterName) return rowRegisterName === selectedRegisterName || rowRegisterName === reportRegisterFilter.trim().toLowerCase();
+        return false;
+      }),
+    [zHistoryRows, zHistoryMonth, zHistoryYear, reportRegisterFilter, reportRegisters],
+  );
+  const formatZHistoryOptionLabel = useCallback(
+    (r: ZHistoryRow) => {
+      const d = new Date(r.periodEnd || r.createdAt || "");
+      const time = Number.isNaN(d.getTime()) ? "--:--:--" : format(d, "HH:mm:ss");
+      const date = Number.isNaN(d.getTime()) ? "--/--/----" : format(d, "dd-MM-yyyy");
+      const register = String(r.registerName || "").trim() || t("allRegisters");
+      return `#${r.zNumber}  ${time}  ${date}  ${register}`;
+    },
+    [t],
   );
 
   const ticketReportUserLabel = useMemo(
@@ -1546,6 +1630,8 @@ const Reports = () => {
             periodStart: zPreviewPayload?.periodStart || null,
             periodEnd: zPreviewPayload?.periodEnd || null,
             lines: Array.isArray(zPreviewPayload?.lines) ? zPreviewPayload.lines : [],
+            registerId: reportRegisterFilter || null,
+            registerName: reportRegisters.find((r) => r.id === reportRegisterFilter)?.name || null,
           }),
         },
       );
@@ -1563,7 +1649,7 @@ const Reports = () => {
     } finally {
       setZReportSaving(false);
     }
-  }, [zReportSaving, zReportSaved, lang, user?.name, user?.email, user?.id, zPreviewPayload?.periodStart, zPreviewPayload?.periodEnd, zPreviewPayload?.lines]);
+  }, [zReportSaving, zReportSaved, lang, user?.name, user?.email, user?.id, zPreviewPayload?.periodStart, zPreviewPayload?.periodEnd, zPreviewPayload?.lines, reportRegisterFilter, reportRegisters]);
 
   const printSavedZReport = useCallback(() => {
     if (!Array.isArray(zPreviewPayload?.lines) || zPreviewPayload.lines.length === 0) return;
@@ -1937,6 +2023,17 @@ const Reports = () => {
       document.body.classList.remove(Z_REPORT_PRINT_BODY_CLASS);
     }
   }, [zPreviewOpen]);
+  useEffect(() => {
+    if (tab !== "z" || zSubTab !== "history") return;
+    void loadZHistoryRows();
+  }, [tab, zSubTab, loadZHistoryRows]);
+  useEffect(() => {
+    if (!zHistoryFilteredRows.length) {
+      setZHistoryReportId("");
+      return;
+    }
+    setZHistoryReportId((prev) => (prev && zHistoryFilteredRows.some((r) => r.id === prev) ? prev : zHistoryFilteredRows[0].id));
+  }, [zHistoryFilteredRows]);
 
   const tabs = [
     { id: "tickets", label: t("tickets"), icon: <Ticket className="h-4 w-4" /> },
@@ -2421,7 +2518,7 @@ const Reports = () => {
                 <div className="grid grid-cols-[120px_1fr] items-center gap-4">
                   <Label className="text-sm font-medium">{t("period")}</Label>
                   <div className="flex items-center gap-2">
-                    <Select defaultValue={String(new Date().getMonth() + 1).padStart(2, "0")}>
+                    <Select value={zHistoryMonth} onValueChange={setZHistoryMonth}>
                       <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {Array.from({ length: 12 }).map((_, i) => {
@@ -2430,7 +2527,7 @@ const Reports = () => {
                         })}
                       </SelectContent>
                     </Select>
-                    <Select defaultValue={String(new Date().getFullYear())}>
+                    <Select value={zHistoryYear} onValueChange={setZHistoryYear}>
                       <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {Array.from({ length: 6 }).map((_, i) => {
@@ -2443,13 +2540,25 @@ const Reports = () => {
                 </div>
                 <div className="grid grid-cols-[120px_1fr] items-center gap-4">
                   <Label className="text-sm font-medium">{t("report")}</Label>
-                  <Select defaultValue="--">
+                  <Select value={zHistoryReportId} onValueChange={setZHistoryReportId}>
                     <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="--">--</SelectItem></SelectContent>
+                    <SelectContent>
+                      {zHistoryFilteredRows.map((r) => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {formatZHistoryOptionLabel(r)}
+                          </SelectItem>
+                        ))}
+                      {zHistoryFilteredRows.length === 0 ? <SelectItem value="__none" disabled>--</SelectItem> : null}
+                    </SelectContent>
                   </Select>
                 </div>
                 <div className="pt-3 flex justify-center">
-                  <Button className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6">
+                  <Button
+                    type="button"
+                    disabled={zHistoryLoading || !zHistoryReportId}
+                    onClick={() => void openSelectedZHistoryReport()}
+                    className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6"
+                  >
                     <Cloud className="h-4 w-4" /> {t("showReport")}
                   </Button>
                 </div>
