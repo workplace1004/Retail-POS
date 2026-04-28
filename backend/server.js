@@ -5045,6 +5045,7 @@ app.post('/api/orders', async (req, res) => {
 
 // REST: update order (add/remove items, status, customer, userId, printed, itemBatchBoundaries, itemBatchMeta)
 app.patch('/api/orders/:id', async (req, res) => {
+  const orderId = req.params.id;
   const {
     status,
     items,
@@ -5056,6 +5057,10 @@ app.patch('/api/orders/:id', async (req, res) => {
     itemBatchBoundaries,
     itemBatchMeta
   } = req.body;
+  const existingBefore = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: { status: true },
+  });
   const updates = {};
   if (status !== undefined) updates.status = status;
   if (userId !== undefined) updates.userId = userId || null;
@@ -5090,11 +5095,11 @@ app.patch('/api/orders/:id', async (req, res) => {
     }
   }
   if (items !== undefined) {
-    await prisma.orderItem.deleteMany({ where: { orderId: req.params.id } });
+    await prisma.orderItem.deleteMany({ where: { orderId: orderId } });
     if (items.length) {
       await prisma.orderItem.createMany({
         data: items.map(({ productId, quantity, price, notes }) => ({
-          orderId: req.params.id,
+          orderId: orderId,
           productId,
           quantity,
           price,
@@ -5103,16 +5108,55 @@ app.patch('/api/orders/:id', async (req, res) => {
       });
     }
     const orderWithItems = await prisma.order.findUnique({
-      where: { id: req.params.id },
+      where: { id: orderId },
       include: { items: true }
     });
     updates.total = orderWithItems?.items?.reduce((s, i) => s + i.price * i.quantity, 0) ?? 0;
   }
+
   const order = await prisma.order.update({
-    where: { id: req.params.id },
+    where: { id: orderId },
     data: updates,
     include: { items: orderItemsInclude, customer: true, user: true, payments: true }
   });
+
+  // Stock: decrement when order first becomes paid (POS sale complete).
+  try {
+    const nextStatus = String(order.status || '');
+    const prevStatus = String(existingBefore?.status || '');
+    if (nextStatus === 'paid' && prevStatus !== 'paid') {
+      const qtyByProduct = new Map();
+      for (const it of order.items || []) {
+        const pid = String(it.productId || '').trim();
+        if (!pid) continue;
+        const q = Math.max(0, Math.floor(Number(it.quantity) || 0));
+        if (!q) continue;
+        qtyByProduct.set(pid, (qtyByProduct.get(pid) || 0) + q);
+      }
+      if (qtyByProduct.size) {
+        await prisma.$transaction(async (tx) => {
+          for (const [productId, delta] of qtyByProduct.entries()) {
+            const p = await tx.product.findUnique({
+              where: { id: productId },
+              select: { stock: true },
+            });
+            if (!p) continue;
+            const raw = p.stock != null ? String(p.stock).trim() : '';
+            if (raw === '') continue;
+            const cur = Number.parseFloat(raw.replace(',', '.'));
+            if (!Number.isFinite(cur)) continue;
+            const next = Math.max(0, cur - delta);
+            await tx.product.update({
+              where: { id: productId },
+              data: { stock: String(next) },
+            });
+          }
+        });
+      }
+    }
+  } catch (stockErr) {
+    console.error('Stock update on order paid', stockErr);
+  }
 
   // Save payment breakdown to OrderPayment for reports when order is marked paid or in_planning (pay-now-from-in-waiting flow)
   if ((status === 'paid' || status === 'in_planning') && paymentBreakdown?.amounts && typeof paymentBreakdown.amounts === 'object') {
@@ -5121,12 +5165,12 @@ app.patch('/api/orders/:id', async (req, res) => {
     if (methodIds.length > 0) {
       const methods = await prisma.paymentMethod.findMany({ where: { id: { in: methodIds } } });
       const validMethodIds = new Set(methods.map((m) => m.id));
-      await prisma.orderPayment.deleteMany({ where: { orderId: req.params.id } });
+      await prisma.orderPayment.deleteMany({ where: { orderId: orderId } });
       await prisma.orderPayment.createMany({
         data: methodIds
           .filter((id) => validMethodIds.has(id))
           .map((id) => ({
-            orderId: req.params.id,
+            orderId: orderId,
             paymentMethodId: id,
             amount: Math.round(Math.max(0, Number(amounts[id]) || 0) * 100) / 100
           }))
