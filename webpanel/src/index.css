@@ -416,6 +416,75 @@
   }
 }
 
+@media print {
+  html:has(body.print-z-report-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-z-report-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-z-report-only > * {
+    display: none !important;
+  }
+  body.print-z-report-only [data-z-print-content] {
+    display: block !important;
+  }
+  body.print-z-report-only * {
+    visibility: hidden;
+  }
+  body.print-z-report-only #z-report-print-area,
+  body.print-z-report-only #z-report-print-area * {
+    visibility: visible;
+  }
+  body.print-z-report-only #z-report-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: fit-content !important;
+    margin: 0 auto !important;
+    padding: 2mm 3mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: 1px solid #171717 !important;
+    color: #171717 !important;
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+  body.print-z-report-only #z-report-print-area * {
+    color: #171717 !important;
+    background: #fff !important;
+    background-color: #fff !important;
+    border-color: #d4d4d4 !important;
+  }
+  body.print-z-report-only [data-z-print-content] {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    max-width: none !important;
+    width: auto !important;
+    max-height: none !important;
+    height: auto !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+  }
+  body.print-z-report-only [data-z-print-scroll] {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+  body.print-z-report-only [data-z-print-content] > button {
+    display: none !important;
+  }
+}
+
 /* Tickets modal: print only #tickets-report-print-area (minimal kassarapport-style sheet) */
 @media print {
   html:has(body.print-empties-report-only) {

@@ -2532,6 +2532,7 @@ const SETTING_KEY_DEVICE_SETTINGS = 'device_settings';
 const SETTING_KEY_SYSTEM_SETTINGS = 'system_settings';
 const SETTING_KEY_PRODUCTION_MESSAGES = 'production_messages';
 const SETTING_KEY_PRINTER_LABELS = 'pos_printer_labels';
+const SETTING_KEY_REPORT_SETTINGS = 'report_settings';
 /** Persisted kiosk self-order basket (subproduct lines); survives refresh. */
 const SETTING_KEY_KIOSK_BASKET = 'kiosk_basket_draft';
 const KIOSK_BASKET_MAX_LINES = 300;
@@ -2615,6 +2616,28 @@ function normalizeKdsLineStates(raw) {
     if (Object.keys(inner).length) out[orderId] = inner;
   }
   return out;
+}
+
+function normalizeReportSettings(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const autoCreateHourRaw = String(source.autoCreateHour ?? '00').trim();
+  const hourNum = Number.parseInt(autoCreateHourRaw, 10);
+  const hour = Number.isFinite(hourNum) ? Math.max(0, Math.min(hourNum, 23)) : 0;
+  const sectionVisibilityRaw =
+    source.sectionVisibility && typeof source.sectionVisibility === 'object' && !Array.isArray(source.sectionVisibility)
+      ? source.sectionVisibility
+      : {};
+  return {
+    sectionVisibility: {
+      categoryTotals: sectionVisibilityRaw.categoryTotals === true,
+      productTotals: sectionVisibilityRaw.productTotals === true,
+      hourTotals: sectionVisibilityRaw.hourTotals === true,
+      hourTotalsPerUser: sectionVisibilityRaw.hourTotalsPerUser === true,
+    },
+    dailyAutoCreateEnabled: source.dailyAutoCreateEnabled === true,
+    autoCreateHour: String(hour).padStart(2, '0'),
+    sendEmailTo: String(source.sendEmailTo ?? '').trim().slice(0, 320),
+  };
 }
 
 async function loadKdsLineStatesMap() {
@@ -2988,6 +3011,37 @@ app.put('/api/settings/system-settings', async (req, res) => {
   } catch (err) {
     console.error('PUT /api/settings/system-settings', err);
     res.status(500).json({ error: err.message || 'Failed to save system settings' });
+  }
+});
+
+app.get('/api/settings/reports', async (req, res) => {
+  try {
+    const row = await prisma.appSetting.findUnique({ where: { key: SETTING_KEY_REPORT_SETTINGS } });
+    if (!row?.value) {
+      res.json({ value: normalizeReportSettings({}) });
+      return;
+    }
+    const parsed = JSON.parse(row.value);
+    res.json({ value: normalizeReportSettings(parsed) });
+  } catch (err) {
+    console.error('GET /api/settings/reports', err);
+    res.status(500).json({ error: err.message || 'Failed to get report settings' });
+  }
+});
+
+app.put('/api/settings/reports', async (req, res) => {
+  try {
+    const safeValue = normalizeReportSettings(req.body?.value);
+    const serialized = JSON.stringify(safeValue);
+    await prisma.appSetting.upsert({
+      where: { key: SETTING_KEY_REPORT_SETTINGS },
+      create: { key: SETTING_KEY_REPORT_SETTINGS, value: serialized },
+      update: { value: serialized },
+    });
+    res.json({ value: safeValue });
+  } catch (err) {
+    console.error('PUT /api/settings/reports', err);
+    res.status(500).json({ error: err.message || 'Failed to save report settings' });
   }
 });
 
@@ -3516,6 +3570,7 @@ const financialReportOrdersInclude = {
   items: orderItemsInclude,
   payments: { include: { paymentMethod: true } },
   user: true,
+  posRegister: true,
 };
 
 function loadPaidOrdersForFinancialPeriod(tx, periodStart, periodEndExclusive) {
@@ -3577,6 +3632,440 @@ app.get('/api/reports/financial/x', async (req, res) => {
   } catch (err) {
     console.error('GET /api/reports/financial/x', err);
     res.status(500).json({ error: err.message || 'Failed to build X report' });
+  }
+});
+
+/** Webpanel: Z preview (read-only) with register/manual-time + optional sections. */
+app.post('/api/webpanel/reports/z-preview', async (req, res) => {
+  try {
+    const registerIdRaw = String(req.body?.registerId ?? '').trim();
+    const registerId = registerIdRaw && registerIdRaw !== 'all' ? registerIdRaw : null;
+    const createUntilMode = String(req.body?.createUntilMode ?? 'current').trim().toLowerCase() === 'manual' ? 'manual' : 'current';
+    const manualDateRaw = String(req.body?.manualDate ?? '').trim();
+    const manualHourNum = Number.parseInt(String(req.body?.manualHour ?? '0'), 10);
+    const safeManualHour = Number.isFinite(manualHourNum) ? Math.max(0, Math.min(manualHourNum, 24)) : 0;
+    const sectionVisibilityRaw =
+      req.body?.sectionVisibility && typeof req.body.sectionVisibility === 'object' && !Array.isArray(req.body.sectionVisibility)
+        ? req.body.sectionVisibility
+        : {};
+    const sectionVisibility = {
+      categoryTotals: sectionVisibilityRaw.categoryTotals === true,
+      productTotals: sectionVisibilityRaw.productTotals === true,
+      hourTotals: sectionVisibilityRaw.hourTotals === true,
+      hourTotalsPerUser: sectionVisibilityRaw.hourTotalsPerUser === true,
+    };
+
+    // Day-based preview only: ignore hour selection for report calculations.
+    const now = new Date();
+    let selectedDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    let displayPeriodEnd = new Date(now);
+    if (createUntilMode === 'manual') {
+      const base = parseDdMmYyyy(manualDateRaw);
+      if (!base) return res.status(400).json({ error: 'Invalid manual date' });
+      selectedDay = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 0, 0, 0, 0);
+      displayPeriodEnd = new Date(selectedDay);
+      displayPeriodEnd.setHours(safeManualHour, 0, 0, 0);
+    } else {
+      displayPeriodEnd = new Date(now);
+    }
+    const queryStart = new Date(selectedDay);
+    let queryEndExclusive = new Date(selectedDay);
+    queryEndExclusive.setDate(queryEndExclusive.getDate() + 1);
+    // For today, don't include future time.
+    if (
+      selectedDay.getFullYear() === now.getFullYear() &&
+      selectedDay.getMonth() === now.getMonth() &&
+      selectedDay.getDate() === now.getDate()
+    ) {
+      queryEndExclusive = new Date(now);
+    }
+    const where = {
+      status: 'paid',
+      updatedAt: { gte: queryStart, lt: queryEndExclusive },
+      ...(registerId ? { posRegisterId: registerId } : {}),
+    };
+    const orders = await prisma.order.findMany({
+      where,
+      include: financialReportOrdersInclude,
+      orderBy: { updatedAt: 'asc' },
+    });
+
+    const nextZNumber = await getFinancialNextZNumber();
+    const lang = sanitizeReportQueryParam(req.body?.lang, 8) || 'en';
+    const isNl = String(lang).toLowerCase().startsWith('nl');
+    const L = {
+      date: isNl ? 'Date' : 'Date',
+      time: isNl ? 'Tijd' : 'Time',
+      financialZ: isNl ? 'Z FINANCIEEL' : 'Z FINANCIAL',
+      terminals: isNl ? 'Terminals' : 'Terminals',
+      categoryTotals: isNl ? 'Categorie totalen' : 'Category totals',
+      productTotals: isNl ? 'Product totalen' : 'Product totals',
+      vatPerRate: isNl ? 'BTW per tarief' : 'VAT per rate',
+      vatCol: isNl ? 'Btw' : 'VAT',
+      payments: isNl ? 'Betalingen' : 'Payments',
+      total: isNl ? 'Totaal' : 'Total',
+      takeOutOnly: isNl ? 'Take-out' : 'Take-out',
+      eatIn: isNl ? 'Eat-In' : 'Eat-In',
+      takeOut: isNl ? 'Take-Out' : 'Take-Out',
+      ticketTypes: isNl ? 'Ticket soorten' : 'Ticket types',
+      counterSales: isNl ? 'Toogverkoop' : 'Counter Sales',
+      hourTotals: isNl ? 'Uur totalen' : 'Hour totals',
+      hour: isNl ? 'uur' : 'hour',
+      orders: isNl ? 'Orders' : 'Orders',
+      amount: isNl ? 'Bedrag' : 'Amount',
+      hourTotalsPerUser: isNl ? 'Uur totalen per gebruiker' : 'Hour totals per user',
+      issuedVatTickets: isNl ? 'Uitgereikte BTW tickets:' : 'Issued VAT tickets:',
+      returnTicketsCount: isNl ? 'Terugname tickets aantal:' : 'Return tickets count:',
+      drawerNoSale: isNl ? 'Lade geopend zonder verkoop:' : 'Drawer opened without sale:',
+      proFormaTickets: isNl ? 'Pro Forma tickets:' : 'Pro Forma tickets:',
+      proFormaReturns: isNl ? 'Pro Forma terugnames:' : 'Pro Forma returns:',
+      proFormaTurnover: isNl ? 'Pro Forma omzet (incl. BTW):' : 'Pro Forma turnover (incl. VAT):',
+      soldGiftCards: isNl ? 'Verkochte kadobons:' : 'Sold gift cards:',
+      soldGiftCardValue: isNl ? 'Verkochte kadobons waarde:' : 'Sold gift card value:',
+      grantedDiscounts: isNl ? 'Toegekende kortingen:' : 'Granted discounts:',
+      totalDiscountInclVat: isNl ? 'Totaalbedrag korting (incl. BTW):' : 'Total discount (incl. VAT):',
+      totalCashRounding: isNl ? 'Totaalbedrag cash afrondingen:' : 'Total cash rounding:',
+      creditTopUp: isNl ? 'Tegoed opwaardering:' : 'Credit top-up:',
+      staffConsumptions: isNl ? 'Personeel consumpties:' : 'Staff consumptions:',
+      onlineCashRefund: isNl ? 'Online betaling cash terugbetaald:' : 'Online payment cash refunded:',
+      onlineOrders: isNl ? 'Aantal online orders:' : 'Number of online orders:',
+    };
+    const userName = sanitizeReportQueryParam(req.body?.userName, 120) || '';
+    const storeName = sanitizeReportQueryParam(req.body?.storeName, 120) || '';
+    const { lines: coreLines, summary } = buildFinancialReportReceiptLines({
+      orders,
+      kind: 'z',
+      zNumber: nextZNumber,
+      periodStart: queryStart,
+      periodEnd: displayPeriodEnd,
+      printedAt: new Date(),
+      lang,
+      userName,
+      storeName,
+    });
+
+    const padRight = (value, length) => String(value ?? '').padEnd(length, ' ').slice(0, length);
+    const padLeft = (value, length) => String(value ?? '').padStart(length, ' ').slice(-length);
+    const dash = '-'.repeat(42);
+    const sectionTitle = (label) => [dash, `    ${label}`.toUpperCase(), dash];
+    const fmtMoney2 = (n) => (Number(n) || 0).toFixed(2);
+    const fmtInt0 = (n) => String(Math.round(Number(n) || 0));
+    const fmtHour = (h) => `${String(Math.max(0, Math.min(23, Number(h) || 0))).padStart(2, '0')}:00`;
+    const lineLabelValue = (label, value) => {
+      const left = String(label ?? '');
+      const right = String(value ?? '');
+      const maxLeft = Math.max(1, 42 - right.length - 1);
+      return `${left.slice(0, maxLeft)}${' '.repeat(Math.max(1, 42 - Math.min(left.length, maxLeft) - right.length))}${right}`;
+    };
+
+    const terminalsMap = new Map();
+    const categoryMap = new Map();
+    const productMap = new Map();
+    const hourMap = new Map();
+    const hourUserMap = new Map();
+    const paymentMap = new Map();
+    const vatMap = new Map();
+    const giftRe = /gift|kadobon|voucher|cadeau|kadobonn|hediye/i;
+    const creditTopUpRe = /top[\s-]?up|opwaardering|opladen|reload|credit/i;
+    const staffUseRe = /staff|personeel|employee/i;
+    const cashRefundRe = /refund|terugbetaald|cash\s*back|retour/i;
+    let grossTotal = 0;
+    let ticketCount = 0;
+    let eatInTotal = 0;
+    let takeOutTotal = 0;
+    let eatInCount = 0;
+    let takeOutCount = 0;
+    let returnTicketsCount = 0;
+    let proFormaTickets = 0;
+    let proFormaReturns = 0;
+    let proFormaTurnover = 0;
+    let soldGiftCards = 0;
+    let soldGiftCardValue = 0;
+    let grantedDiscounts = 0;
+    let totalDiscountInclVat = 0;
+    let totalCashRounding = 0;
+    let creditTopUp = 0;
+    let staffConsumptions = 0;
+    let onlineCashRefund = 0;
+    let onlineOrdersCount = 0;
+
+    for (const o of orders) {
+      const total = Number(o.total) || 0;
+      grossTotal += total;
+      ticketCount += 1;
+      if (total < 0) returnTicketsCount += 1;
+      if (String(o.source || '').toLowerCase() === 'weborder') onlineOrdersCount += 1;
+      if (String(o.source || '').toLowerCase().includes('proforma')) {
+        proFormaTickets += 1;
+        proFormaTurnover += total;
+        if (total < 0) proFormaReturns += 1;
+      }
+      const orderAt = new Date(o.updatedAt);
+      const hour = Number(orderAt.getHours()) || 0;
+      const registerName = String(o.posRegister?.name || o.posRegisterId || '—').trim() || '—';
+      const terminal = terminalsMap.get(registerName) || { start: orderAt, end: orderAt };
+      if (orderAt < terminal.start) terminal.start = orderAt;
+      if (orderAt > terminal.end) terminal.end = orderAt;
+      terminalsMap.set(registerName, terminal);
+
+      const hourRow = hourMap.get(hour) || { hour, orders: 0, amount: 0 };
+      hourRow.orders += 1;
+      hourRow.amount += total;
+      hourMap.set(hour, hourRow);
+
+      const userNameRow = String(o.user?.name || o.userId || '—').trim() || '—';
+      const byUser = hourUserMap.get(userNameRow) || new Map();
+      const byUserHour = byUser.get(hour) || { hour, orders: 0, amount: 0 };
+      byUserHour.orders += 1;
+      byUserHour.amount += total;
+      byUser.set(hour, byUserHour);
+      hourUserMap.set(userNameRow, byUser);
+
+      if (o.tableId) {
+        eatInTotal += total;
+        eatInCount += 1;
+      } else {
+        takeOutTotal += total;
+        takeOutCount += 1;
+      }
+
+      if (Array.isArray(o.payments) && o.payments.length > 0) {
+        let orderPaymentSum = 0;
+        for (const p of o.payments) {
+          const label = String(p.paymentMethod?.name || '—').trim() || '—';
+          const amount = Number(p.amount) || 0;
+          orderPaymentSum += amount;
+          paymentMap.set(label, (paymentMap.get(label) || 0) + amount);
+          if (giftRe.test(label)) {
+            soldGiftCards += 1;
+            soldGiftCardValue += amount;
+          }
+          if (creditTopUpRe.test(label)) creditTopUp += amount;
+          if (staffUseRe.test(label)) staffConsumptions += amount;
+          if (cashRefundRe.test(label)) onlineCashRefund += amount;
+        }
+        totalCashRounding += orderPaymentSum - total;
+      } else {
+        paymentMap.set('—', (paymentMap.get('—') || 0) + total);
+      }
+
+      const orderItemsGross = (o.items || []).reduce(
+        (s, it) => s + (Number(it.price) || 0) * (Number(it.quantity) || 0),
+        0,
+      );
+      const discountAmount = Math.max(0, orderItemsGross - total);
+      if (discountAmount > 0.0001) {
+        grantedDiscounts += 1;
+        totalDiscountInclVat += discountAmount;
+      }
+
+      for (const it of o.items || []) {
+        const qty = Number(it.quantity) || 0;
+        const amount = (Number(it.price) || 0) * qty;
+        const category = String(it.product?.category?.name || '—').trim() || '—';
+        const product = String(it.product?.name || '—').trim() || '—';
+        const c = categoryMap.get(category) || { label: category, qty: 0, amount: 0 };
+        c.qty += qty;
+        c.amount += amount;
+        categoryMap.set(category, c);
+        const p = productMap.get(product) || { label: product, qty: 0, amount: 0 };
+        p.qty += qty;
+        p.amount += amount;
+        productMap.set(product, p);
+
+        const eatIn = !!o.tableId;
+        const vatStr = eatIn ? it.product?.vatEatIn : it.product?.vatTakeOut;
+        const m = String(vatStr || '').match(/(\d+(?:[.,]\d+)?)/);
+        const pct = m ? Number.parseFloat(m[1].replace(',', '.')) : null;
+        const key = Number.isFinite(pct) ? `${pct}%` : '—';
+        const base = vatMap.get(key) || { ns: 0, nr: 0, vat: 0, total: 0, pct: Number.isFinite(pct) ? pct : null };
+        const gross = amount;
+        const net = base.pct != null && base.pct > 0 ? gross / (1 + base.pct / 100) : gross;
+        const vat = gross - net;
+        if (eatIn) base.ns += net;
+        else base.nr += net;
+        base.vat += vat;
+        base.total += gross;
+        vatMap.set(key, base);
+      }
+    }
+
+    const fmtDate = (d) => {
+      const x = new Date(d);
+      const dd = String(x.getDate()).padStart(2, '0');
+      const mm = String(x.getMonth() + 1).padStart(2, '0');
+      const yyyy = x.getFullYear();
+      return `${dd}-${mm}-${yyyy}`;
+    };
+    const fmtTime = (d) => {
+      const x = new Date(d);
+      const hh = String(x.getHours()).padStart(2, '0');
+      const mm = String(x.getMinutes()).padStart(2, '0');
+      const ss = String(x.getSeconds()).padStart(2, '0');
+      return `${hh}:${mm}:${ss}`;
+    };
+
+    const lines = [];
+    lines.push('pospoint demo');
+    lines.push('BE1234567890');
+    lines.push('pospoint');
+    lines.push('pospoint');
+    lines.push('pospoint');
+    lines.push(lineLabelValue(`${L.date} : ${fmtDate(displayPeriodEnd)}`, `${L.time}: ${fmtTime(displayPeriodEnd)}`));
+    lines.push(dash);
+    lines.push(`       ${L.financialZ} #${nextZNumber}`);
+    lines.push(dash);
+    lines.push(`${L.terminals}:`);
+    for (const [name, v] of [...terminalsMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      lines.push(lineLabelValue(name, `${fmtDate(v.start).slice(0, 5)}-${fmtTime(v.start).slice(0, 5)} => ${fmtDate(v.end).slice(0, 5)}-${fmtTime(v.end).slice(0, 5)}`));
+    }
+
+    if (sectionVisibility.categoryTotals) {
+      const rows = [...categoryMap.values()].sort((a, b) => b.amount - a.amount);
+      lines.push(...sectionTitle(L.categoryTotals));
+      for (const r of rows) lines.push(`${padLeft(fmtInt0(r.qty), 3)} ${padRight(r.label, 28)} ${padLeft(fmtMoney2(r.amount), 8)}`);
+      lines.push('');
+      lines.push(lineLabelValue(fmtInt0(rows.reduce((s, r) => s + (Number(r.qty) || 0), 0)), `${L.total} ${fmtMoney2(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0))}`));
+    }
+
+    if (sectionVisibility.productTotals) {
+      const rows = [...productMap.values()].sort((a, b) => b.amount - a.amount);
+      lines.push(...sectionTitle(L.productTotals));
+      for (const r of rows) lines.push(`${padLeft(fmtInt0(r.qty), 3)} ${padRight(r.label, 28)} ${padLeft(fmtMoney2(r.amount), 8)}`);
+      lines.push('');
+      lines.push(lineLabelValue(fmtInt0(rows.reduce((s, r) => s + (Number(r.qty) || 0), 0)), `${L.total} ${fmtMoney2(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0))}`));
+    }
+
+    lines.push(...sectionTitle(L.vatPerRate));
+    lines.push(`${padRight('', 6)}${padLeft('MvH', 12)}${padLeft('MvH', 10)}${padLeft(L.vatCol, 8)}${padLeft(L.total, 9)}`);
+    lines.push(`${padRight('', 6)}${padLeft('NS', 12)}${padLeft('NR', 10)}${padLeft('', 8)}${padLeft('', 9)}`);
+    let vatNs = 0;
+    let vatNr = 0;
+    let vatVat = 0;
+    let vatTotal = 0;
+    for (const [rate, r] of [...vatMap.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])))) {
+      vatNs += Number(r.ns) || 0;
+      vatNr += Number(r.nr) || 0;
+      vatVat += Number(r.vat) || 0;
+      vatTotal += Number(r.total) || 0;
+      lines.push(`${padRight(rate, 6)}${padLeft(fmtMoney2(r.ns), 12)}${padLeft(fmtMoney2(r.nr), 10)}${padLeft(fmtMoney2(r.vat), 8)}${padLeft(fmtMoney2(r.total), 9)}`);
+    }
+    lines.push('');
+    lines.push(`${padRight(L.total, 6)}${padLeft(fmtMoney2(vatNs), 12)}${padLeft(fmtMoney2(vatNr), 10)}${padLeft(fmtMoney2(vatVat), 8)}${padLeft(fmtMoney2(vatTotal), 9)}`);
+
+    lines.push(...sectionTitle(L.payments));
+    for (const [name, amount] of [...paymentMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      lines.push(lineLabelValue(name, fmtMoney2(amount)));
+    }
+    lines.push(lineLabelValue(L.total, fmtMoney2(grossTotal)));
+
+    lines.push(...sectionTitle(L.takeOutOnly));
+    lines.push(lineLabelValue(`${takeOutCount} ${L.takeOut}`, fmtMoney2(takeOutTotal)));
+    lines.push(lineLabelValue(L.total, fmtMoney2(grossTotal)));
+
+    lines.push(...sectionTitle(L.ticketTypes));
+    lines.push(lineLabelValue(`${ticketCount} ${L.counterSales}`, fmtMoney2(grossTotal)));
+    lines.push(lineLabelValue(L.total, fmtMoney2(grossTotal)));
+
+    if (sectionVisibility.hourTotals) {
+      lines.push(...sectionTitle(L.hourTotals));
+      lines.push(`${padRight(L.hour, 8)}${padLeft(L.orders, 10)}${padLeft(L.amount, 16)}`);
+      for (const r of [...hourMap.values()].sort((a, b) => a.hour - b.hour)) {
+        lines.push(`${padRight(fmtHour(r.hour), 8)}${padLeft(fmtInt0(r.orders), 10)}${padLeft(fmtMoney2(r.amount), 16)}`);
+      }
+      lines.push('');
+      lines.push(`${padRight('', 8)}${padLeft(fmtInt0([...hourMap.values()].reduce((s, r) => s + (Number(r.orders) || 0), 0)), 10)}${padLeft(fmtMoney2([...hourMap.values()].reduce((s, r) => s + (Number(r.amount) || 0), 0)), 16)}`);
+    }
+
+    if (sectionVisibility.hourTotalsPerUser) {
+      lines.push(...sectionTitle(L.hourTotalsPerUser));
+      for (const [name, map] of [...hourUserMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+        lines.push('-'.repeat(20));
+        lines.push(name);
+        lines.push(`${padRight(L.hour, 8)}${padLeft(L.orders, 10)}${padLeft(L.amount, 16)}`);
+        for (const r of [...map.values()].sort((a, b) => a.hour - b.hour)) {
+          lines.push(`${padRight(fmtHour(r.hour), 8)}${padLeft(fmtInt0(r.orders), 10)}${padLeft(fmtMoney2(r.amount), 16)}`);
+        }
+        lines.push('');
+        lines.push(`${padRight('', 8)}${padLeft(fmtInt0([...map.values()].reduce((s, r) => s + (Number(r.orders) || 0), 0)), 10)}${padLeft(fmtMoney2([...map.values()].reduce((s, r) => s + (Number(r.amount) || 0), 0)), 16)}`);
+      }
+    }
+
+    lines.push(dash);
+    lines.push(lineLabelValue(L.issuedVatTickets, fmtInt0(ticketCount)));
+    lines.push(`${padRight('', 6)}${padRight('NS', 4)}${padLeft(fmtInt0(eatInCount), 18)}`);
+    lines.push(`${padRight('', 6)}${padRight('NR', 4)}${padLeft(fmtInt0(takeOutCount), 18)}`);
+    lines.push(lineLabelValue(L.returnTicketsCount, fmtInt0(returnTicketsCount)));
+    lines.push(lineLabelValue(L.drawerNoSale, '0'));
+    lines.push(lineLabelValue(L.proFormaTickets, fmtInt0(proFormaTickets)));
+    lines.push(lineLabelValue(L.proFormaReturns, fmtInt0(proFormaReturns)));
+    lines.push(lineLabelValue(L.proFormaTurnover, fmtMoney2(proFormaTurnover)));
+    lines.push(lineLabelValue(L.soldGiftCards, fmtInt0(soldGiftCards)));
+    lines.push(lineLabelValue(L.soldGiftCardValue, fmtMoney2(soldGiftCardValue)));
+    lines.push(lineLabelValue(L.grantedDiscounts, fmtInt0(grantedDiscounts)));
+    lines.push(lineLabelValue(L.totalDiscountInclVat, fmtMoney2(totalDiscountInclVat)));
+    lines.push(lineLabelValue(L.totalCashRounding, fmtMoney2(totalCashRounding)));
+    lines.push(lineLabelValue(L.creditTopUp, fmtMoney2(creditTopUp)));
+    lines.push(lineLabelValue(L.staffConsumptions, fmtMoney2(staffConsumptions)));
+    lines.push(lineLabelValue(L.onlineCashRefund, fmtMoney2(onlineCashRefund)));
+    lines.push(lineLabelValue(L.onlineOrders, fmtInt0(onlineOrdersCount)));
+
+    res.json({
+      lines,
+      coreLines,
+      summary,
+      nextZNumber,
+      periodStart: queryStart.toISOString(),
+      periodEnd: displayPeriodEnd.toISOString(),
+      orderCount: orders.length,
+    });
+  } catch (err) {
+    console.error('POST /api/webpanel/reports/z-preview', err);
+    res.status(500).json({ error: err.message || 'Failed to build Z preview report' });
+  }
+});
+
+/** Webpanel: persist a previewed Z report without financial period close guard. */
+app.post('/api/webpanel/reports/z-save', async (req, res) => {
+  try {
+    const lines = Array.isArray(req.body?.lines) ? req.body.lines.map((x) => String(x ?? '')) : [];
+    if (!lines.length) return res.status(400).json({ error: 'No report lines to save.' });
+    const closedByName = sanitizeReportQueryParam(req.body?.closedByName, 120) || null;
+    const closedByUserId = sanitizeReportQueryParam(req.body?.closedByUserId, 64) || null;
+    const periodStartRaw = String(req.body?.periodStart || '').trim();
+    const periodEndRaw = String(req.body?.periodEnd || '').trim();
+    const periodStart = Number.isNaN(new Date(periodStartRaw).getTime()) ? new Date() : new Date(periodStartRaw);
+    const periodEnd = Number.isNaN(new Date(periodEndRaw).getTime()) ? new Date() : new Date(periodEndRaw);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const zNumber = await getFinancialNextZNumber(tx);
+      const archive = {
+        kind: 'z',
+        zNumber,
+        lines,
+        periodStart: periodStart.toISOString(),
+        periodEnd: periodEnd.toISOString(),
+        closedAt: new Date().toISOString(),
+      };
+      await tx.zReport.create({
+        data: {
+          zNumber,
+          periodStart,
+          periodEnd,
+          summaryJson: JSON.stringify(archive),
+          closedByUserId,
+          closedByName,
+          scope: 'webpanel',
+        },
+      });
+      await upsertAppSettingTx(tx, SETTING_FINANCIAL_NEXT_Z, String(zNumber + 1));
+      return { zNumber };
+    });
+
+    res.json({ ok: true, zNumber: result.zNumber });
+  } catch (err) {
+    console.error('POST /api/webpanel/reports/z-save', err);
+    res.status(500).json({ error: err.message || 'Failed to save Z report' });
   }
 });
 

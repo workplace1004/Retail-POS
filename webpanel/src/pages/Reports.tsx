@@ -77,6 +77,12 @@ import {
   buildTimeClockReportPdfFileName,
   downloadTimeClockReportPdf,
 } from "@/lib/timeClockReportPdf";
+import {
+  EMPTIES_REPORT_PRINT_AREA_ID,
+  buildEmptiesReportPdfFileName,
+  downloadEmptiesReportPdf,
+} from "@/lib/emptiesReportPdf";
+import { Z_REPORT_PRINT_AREA_ID, buildZReportPdfFileName, downloadZReportPdf } from "@/lib/zReportPdf";
 
 const PERIODIC_REPORT_PRINT_BODY_CLASS = "print-periodic-report-only";
 const BEST_REPORT_PRINT_BODY_CLASS = "print-best-report-only";
@@ -149,19 +155,19 @@ function PeriodicReportSectionBlock({
   if (sectionKey === "categoryTotals") {
     const block = sections.categoryTotals as
       | {
-          rows?: {
-            label: string;
-            orderCount?: number;
-            lineCount?: number;
-            qty?: number;
-            amount: number;
-            isSubproducts?: boolean;
-          }[];
-          total?: number;
-          totalOrderCount?: number;
-          totalLineCount?: number;
-          totalQty?: number;
-        }
+        rows?: {
+          label: string;
+          orderCount?: number;
+          lineCount?: number;
+          qty?: number;
+          amount: number;
+          isSubproducts?: boolean;
+        }[];
+        total?: number;
+        totalOrderCount?: number;
+        totalLineCount?: number;
+        totalQty?: number;
+      }
       | undefined;
     const rows = Array.isArray(block?.rows) ? block.rows : [];
     const total = Number(block?.total) || 0;
@@ -241,9 +247,9 @@ function PeriodicReportSectionBlock({
   if (sectionKey === "vatTotals") {
     const block = sections.vatTotals as
       | {
-          rows?: { rateLabel: string; mvhNs: number; mvhNr: number; vat: number; gross: number; net: number }[];
-          sums?: { mvhNs: number; mvhNr: number; vat: number; gross: number; net: number };
-        }
+        rows?: { rateLabel: string; mvhNs: number; mvhNr: number; vat: number; gross: number; net: number }[];
+        sums?: { mvhNs: number; mvhNr: number; vat: number; gross: number; net: number };
+      }
       | undefined;
     const rows = Array.isArray(block?.rows) ? block.rows : [];
     const sums = block?.sums;
@@ -292,10 +298,10 @@ function PeriodicReportSectionBlock({
   if (sectionKey === "payments") {
     const block = sections.payments as
       | {
-          rows?: { label: string; orderCount?: number; amount: number }[];
-          total?: number;
-          totalOrderCount?: number;
-        }
+        rows?: { label: string; orderCount?: number; amount: number }[];
+        total?: number;
+        totalOrderCount?: number;
+      }
       | undefined;
     const rows = Array.isArray(block?.rows) ? block.rows : [];
     const total = Number(block?.total) || 0;
@@ -446,12 +452,20 @@ type TimeClockReportRow = {
   endAt: string | null;
   hours: number;
 };
+type ZPreviewPayload = {
+  lines?: string[];
+  periodStart?: string;
+  periodEnd?: string;
+  nextZNumber?: number;
+  orderCount?: number;
+};
 
 type EmptiesTotals = { out: number; in: number; diff: number };
 type EmptiesRow = { label: string; out: number; in: number; diff: number };
 
 type BestSellersMode = "best25" | "worst25" | "p80" | "cust10";
 type BestSellersDisplay = "text" | "pie" | "bar";
+type ReportSectionVisibilityKey = "categoryTotals" | "productTotals" | "hourTotals" | "hourTotalsPerUser";
 type BestSellersEntity = "products" | "customers";
 type BestSellersRow = {
   label: string;
@@ -508,11 +522,59 @@ function formatTimeClockDuration(totalSeconds: number) {
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
+function isZPreviewCenteredTitle(line: string) {
+  const s = String(line || "").trim();
+  if (!s || s.startsWith("-")) return false;
+  if (/^Z\s+(FINANCIEEL|FINANCIAL)\b/i.test(s)) return true;
+  return [
+    "CATEGORIE TOTALEN",
+    "CATEGORY TOTALS",
+    "PRODUCT TOTALEN",
+    "PRODUCT TOTALS",
+    "BTW PER TARIEF",
+    "VAT PER RATE",
+    "BETALINGEN",
+    "PAYMENTS",
+    "TAKE-OUT",
+    "TICKET SOORTEN",
+    "TICKET TYPES",
+    "UUR TOTALEN",
+    "HOUR TOTALS PER USER",
+    "HOUR TOTALS",
+    "UUR TOTALEN PER GEBRUIKER",
+  ].includes(s.toUpperCase());
+}
+
+function isZPreviewHeaderLine(line: string) {
+  const s = String(line || "").trim();
+  if (!s) return false;
+  if (/^pospoint demo$/i.test(s)) return true;
+  if (/^BE[0-9]+$/i.test(s)) return true;
+  if (/^pospoint$/i.test(s)) return true;
+  return false;
+}
+
+function formatZReportLineForDisplay(line: string, isSaved: boolean) {
+  const raw = String(line ?? "");
+  // Keep date+time visible and normalized like the classic report header.
+  if (/\b(Date|Datum)\s*:/.test(raw) && /\b(Time|Tijd)\s*:/.test(raw)) {
+    const m = raw.match(
+      /^\s*(?:Date|Datum)\s*:\s*(\d{2}-\d{2}-\d{4})\s+(?:Time|Tijd)\s*:\s*(\d{2}:\d{2}:\d{2})\s*$/i,
+    );
+    if (m) {
+      const timeLabel = /Tijd/i.test(raw) ? "Tijd" : "Time";
+      return `Date : ${m[1]}            ${timeLabel}: ${m[2]}`;
+    }
+  }
+  return raw;
+}
+
 const SUPPLIER_REPORT_PRINT_BODY_CLASS = "print-supplier-report-only";
 const STOCK_REPORT_PRINT_BODY_CLASS = "print-stock-report-only";
 const TICKETS_REPORT_PRINT_BODY_CLASS = "print-tickets-report-only";
 const TIME_CLOCK_REPORT_PRINT_BODY_CLASS = "print-time-clock-report-only";
 const EMPTIES_REPORT_PRINT_BODY_CLASS = "print-empties-report-only";
+const Z_REPORT_PRINT_BODY_CLASS = "print-z-report-only";
 
 /** Print only the report sheet (see `#supplier-report-print-area` + `index.css` @media print). */
 function printSupplierReportMain() {
@@ -615,6 +677,20 @@ function printEmptiesReportMain() {
   window.print();
 }
 
+function printZReportMain() {
+  document.body.classList.add(Z_REPORT_PRINT_BODY_CLASS);
+  let finished = false;
+  const removeClass = () => {
+    if (finished) return;
+    finished = true;
+    document.body.classList.remove(Z_REPORT_PRINT_BODY_CLASS);
+    window.removeEventListener("afterprint", removeClass);
+  };
+  window.addEventListener("afterprint", removeClass);
+  window.setTimeout(removeClass, 2000);
+  window.print();
+}
+
 const Reports = () => {
   const { t, lang } = useLanguage();
   const { user } = useAuth();
@@ -660,6 +736,26 @@ const Reports = () => {
   const [ticketExpandLoadingIds, setTicketExpandLoadingIds] = useState<string[]>([]);
   const [ticketExpandErrors, setTicketExpandErrors] = useState<Record<string, string>>({});
   const [zSubTab, setZSubTab] = useState<"history" | "create">("history");
+  const [zCreateUntilMode, setZCreateUntilMode] = useState<"current" | "manual">("current");
+  const [zCreateManualHour, setZCreateManualHour] = useState("0");
+  const [zCreateManualDate, setZCreateManualDate] = useState<Date>(new Date());
+  const [zPreviewOpen, setZPreviewOpen] = useState(false);
+  const [zPreviewLoading, setZPreviewLoading] = useState(false);
+  const [zPreviewPayload, setZPreviewPayload] = useState<ZPreviewPayload | null>(null);
+  const [zReportSaving, setZReportSaving] = useState(false);
+  const [zReportSaved, setZReportSaved] = useState(false);
+  const [zPdfWorking, setZPdfWorking] = useState(false);
+  const zPdfLockRef = useRef(false);
+  const [reportSectionVisibility, setReportSectionVisibility] = useState<Record<ReportSectionVisibilityKey, boolean>>({
+    categoryTotals: false,
+    productTotals: false,
+    hourTotals: false,
+    hourTotalsPerUser: false,
+  });
+  const [dailyAutoCreateEnabled, setDailyAutoCreateEnabled] = useState(false);
+  const [dailyAutoCreateHour, setDailyAutoCreateHour] = useState("00");
+  const [dailyAutoCreateEmail, setDailyAutoCreateEmail] = useState("");
+  const [reportSettingsSaving, setReportSettingsSaving] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportType, setExportType] = useState("orders");
   const [exportFrom, setExportFrom] = useState<Date>(new Date());
@@ -674,6 +770,8 @@ const Reports = () => {
   const [emptiesReportOpen, setEmptiesReportOpen] = useState(false);
   const [emptiesReportOpenedAt, setEmptiesReportOpenedAt] = useState<Date | null>(null);
   const [emptiesReportLoading, setEmptiesReportLoading] = useState(false);
+  const [emptiesPdfWorking, setEmptiesPdfWorking] = useState(false);
+  const emptiesPdfLockRef = useRef(false);
   const [emptiesCategoryTotals, setEmptiesCategoryTotals] = useState<EmptiesTotals>({ out: 0, in: 0, diff: 0 });
   const [emptiesProductTotals, setEmptiesProductTotals] = useState<EmptiesTotals>({ out: 0, in: 0, diff: 0 });
   const [emptiesTransactionTotals, setEmptiesTransactionTotals] = useState<EmptiesTotals>({ out: 0, in: 0, diff: 0 });
@@ -811,11 +909,96 @@ const Reports = () => {
     }
   }, []);
 
+  const loadReportSettings = useCallback(async () => {
+    try {
+      const data = await apiRequest<{
+        value?: {
+          sectionVisibility?: Partial<Record<ReportSectionVisibilityKey, unknown>>;
+          dailyAutoCreateEnabled?: unknown;
+          autoCreateHour?: unknown;
+          sendEmailTo?: unknown;
+        };
+      }>("/api/settings/reports");
+      const value = data?.value && typeof data.value === "object" ? data.value : {};
+      const sectionVisibility =
+        value.sectionVisibility && typeof value.sectionVisibility === "object" ? value.sectionVisibility : {};
+      const parsedHourNum = Number.parseInt(String(value.autoCreateHour ?? "00"), 10);
+      const safeHour = Number.isFinite(parsedHourNum) ? Math.max(0, Math.min(parsedHourNum, 23)) : 0;
+      setReportSectionVisibility({
+        categoryTotals: sectionVisibility.categoryTotals === true,
+        productTotals: sectionVisibility.productTotals === true,
+        hourTotals: sectionVisibility.hourTotals === true,
+        hourTotalsPerUser: sectionVisibility.hourTotalsPerUser === true,
+      });
+      setDailyAutoCreateEnabled(value.dailyAutoCreateEnabled === true);
+      setDailyAutoCreateHour(String(safeHour).padStart(2, "0"));
+      setDailyAutoCreateEmail(String(value.sendEmailTo ?? ""));
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to load report settings.",
+      });
+    }
+  }, []);
+
+  const saveReportSettings = useCallback(async () => {
+    setReportSettingsSaving(true);
+    try {
+      const payload = {
+        sectionVisibility: reportSectionVisibility,
+        dailyAutoCreateEnabled,
+        autoCreateHour: dailyAutoCreateHour,
+        sendEmailTo: dailyAutoCreateEmail.trim(),
+      };
+      const data = await apiRequest<{
+        value?: {
+          sectionVisibility?: Partial<Record<ReportSectionVisibilityKey, unknown>>;
+          dailyAutoCreateEnabled?: unknown;
+          autoCreateHour?: unknown;
+          sendEmailTo?: unknown;
+        };
+      }>("/api/settings/reports", {
+        method: "PUT",
+        body: JSON.stringify({ value: payload }),
+      });
+      const value = data?.value && typeof data.value === "object" ? data.value : payload;
+      const sectionVisibility =
+        value.sectionVisibility && typeof value.sectionVisibility === "object" ? value.sectionVisibility : {};
+      const parsedHourNum = Number.parseInt(String(value.autoCreateHour ?? "00"), 10);
+      const safeHour = Number.isFinite(parsedHourNum) ? Math.max(0, Math.min(parsedHourNum, 23)) : 0;
+      setReportSectionVisibility({
+        categoryTotals: sectionVisibility.categoryTotals === true,
+        productTotals: sectionVisibility.productTotals === true,
+        hourTotals: sectionVisibility.hourTotals === true,
+        hourTotalsPerUser: sectionVisibility.hourTotalsPerUser === true,
+      });
+      setDailyAutoCreateEnabled(value.dailyAutoCreateEnabled === true);
+      setDailyAutoCreateHour(String(safeHour).padStart(2, "0"));
+      setDailyAutoCreateEmail(String(value.sendEmailTo ?? ""));
+      toast({ description: t("save") });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to save report settings.",
+      });
+    } finally {
+      setReportSettingsSaving(false);
+    }
+  }, [dailyAutoCreateEmail, dailyAutoCreateEnabled, dailyAutoCreateHour, reportSectionVisibility, t]);
+
   useEffect(() => {
     void loadReportUsers();
     void loadReportSuppliers();
     void loadReportRegisters();
-  }, [loadReportUsers, loadReportSuppliers, loadReportRegisters]);
+    void loadReportSettings();
+  }, [loadReportUsers, loadReportSuppliers, loadReportRegisters, loadReportSettings]);
+
+  useEffect(() => {
+    if (zSubTab !== "create") return;
+    if (reportRegisterFilter !== "all") return;
+    if (!reportRegisters.length) return;
+    setReportRegisterFilter(reportRegisters[0]?.id || "all");
+  }, [zSubTab, reportRegisterFilter, reportRegisters]);
 
   const userSelectContent = useMemo(
     () => (
@@ -843,6 +1026,18 @@ const Reports = () => {
       </>
     ),
     [t, reportRegisters],
+  );
+  const registerSelectContentNoAll = useMemo(
+    () => (
+      <>
+        {reportRegisters.map((r) => (
+          <SelectItem key={r.id} value={r.id}>
+            {r.name}
+          </SelectItem>
+        ))}
+      </>
+    ),
+    [reportRegisters],
   );
 
   const ticketReportUserLabel = useMemo(
@@ -1288,6 +1483,134 @@ const Reports = () => {
     }
   }, [fromDate, toDate, clockFromHour, clockToHour, emptiesReportType, ticketHourToTime]);
 
+  const openZPreviewReport = useCallback(async () => {
+    if (!reportRegisterFilter || reportRegisterFilter === "all") {
+      toast({ variant: "destructive", description: "Please select a register first." });
+      return;
+    }
+    setZPreviewLoading(true);
+    try {
+      const data = await apiRequest<ZPreviewPayload>("/api/webpanel/reports/z-preview", {
+        method: "POST",
+        body: JSON.stringify({
+          registerId: reportRegisterFilter,
+          createUntilMode: zCreateUntilMode,
+          manualDate: format(zCreateManualDate, "dd-MM-yyyy"),
+          manualHour: zCreateManualHour,
+          sectionVisibility: reportSectionVisibility,
+          lang: lang === "nl" ? "nl" : "en",
+          userName: user?.name || user?.email || "",
+          storeName: "Retail POS",
+        }),
+      });
+      setZPreviewPayload({
+        lines: Array.isArray(data?.lines) ? data.lines : [],
+        periodStart: String(data?.periodStart ?? ""),
+        periodEnd: String(data?.periodEnd ?? ""),
+        nextZNumber: Number(data?.nextZNumber) || undefined,
+        orderCount: Number(data?.orderCount) || 0,
+      });
+      setZReportSaved(false);
+      setZPreviewOpen(true);
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to load Z preview.",
+      });
+    } finally {
+      setZPreviewLoading(false);
+    }
+  }, [
+    reportRegisterFilter,
+    zCreateUntilMode,
+    zCreateManualDate,
+    zCreateManualHour,
+    reportSectionVisibility,
+    lang,
+    t,
+    user?.name,
+    user?.email,
+  ]);
+
+  const saveZReport = useCallback(async () => {
+    if (zReportSaving || zReportSaved) return;
+    setZReportSaving(true);
+    try {
+      const data = await apiRequest<{ ok?: boolean; zNumber?: number }>(
+        "/api/webpanel/reports/z-save",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            closedByName: user?.name || user?.email || "",
+            closedByUserId: user?.id ? String(user.id) : null,
+            periodStart: zPreviewPayload?.periodStart || null,
+            periodEnd: zPreviewPayload?.periodEnd || null,
+            lines: Array.isArray(zPreviewPayload?.lines) ? zPreviewPayload.lines : [],
+          }),
+        },
+      );
+      setZPreviewPayload((prev) => ({
+        ...(prev || {}),
+        nextZNumber: Number(data?.zNumber) || prev?.nextZNumber,
+      }));
+      setZReportSaved(true);
+      toast({ description: lang === "nl" ? "Z rapport opgeslagen." : "Z report saved." });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : lang === "nl" ? "Opslaan mislukt." : "Save failed.",
+      });
+    } finally {
+      setZReportSaving(false);
+    }
+  }, [zReportSaving, zReportSaved, lang, user?.name, user?.email, user?.id, zPreviewPayload?.periodStart, zPreviewPayload?.periodEnd, zPreviewPayload?.lines]);
+
+  const printSavedZReport = useCallback(() => {
+    if (!Array.isArray(zPreviewPayload?.lines) || zPreviewPayload.lines.length === 0) return;
+    printZReportMain();
+  }, [zPreviewPayload?.lines]);
+
+  const downloadSavedZPdf = useCallback(async () => {
+    if (zPdfLockRef.current) return;
+    if (!Array.isArray(zPreviewPayload?.lines) || zPreviewPayload.lines.length === 0) return;
+    zPdfLockRef.current = true;
+    setZPdfWorking(true);
+    try {
+      const base = buildZReportPdfFileName(["z-report", format(new Date(), "yyyy-MM-dd-HHmm")]);
+      (window as unknown as { __zReportPdfLines?: string[] }).__zReportPdfLines = [...zPreviewPayload.lines];
+      await downloadZReportPdf(base);
+      toast({ description: t("reportPdfDownloaded") });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : t("reportPdfFailed"),
+      });
+    } finally {
+      delete (window as unknown as { __zReportPdfLines?: string[] }).__zReportPdfLines;
+      zPdfLockRef.current = false;
+      setZPdfWorking(false);
+    }
+  }, [zPreviewPayload?.lines, t]);
+
+  const downloadEmptiesPdf = useCallback(async () => {
+    if (emptiesPdfLockRef.current) return;
+    emptiesPdfLockRef.current = true;
+    setEmptiesPdfWorking(true);
+    try {
+      const base = buildEmptiesReportPdfFileName(["empties-report", format(new Date(), "yyyy-MM-dd-HHmm")]);
+      await downloadEmptiesReportPdf(base);
+      toast({ description: t("reportPdfDownloaded") });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : t("reportPdfFailed"),
+      });
+    } finally {
+      emptiesPdfLockRef.current = false;
+      setEmptiesPdfWorking(false);
+    }
+  }, [t]);
+
   const downloadTimeClockPdf = useCallback(async () => {
     if (timeClockPdfLockRef.current) return;
     timeClockPdfLockRef.current = true;
@@ -1609,6 +1932,11 @@ const Reports = () => {
       document.body.classList.remove(EMPTIES_REPORT_PRINT_BODY_CLASS);
     }
   }, [emptiesReportOpen]);
+  useEffect(() => {
+    if (!zPreviewOpen) {
+      document.body.classList.remove(Z_REPORT_PRINT_BODY_CLASS);
+    }
+  }, [zPreviewOpen]);
 
   const tabs = [
     { id: "tickets", label: t("tickets"), icon: <Ticket className="h-4 w-4" /> },
@@ -1987,25 +2315,71 @@ const Reports = () => {
               </PopoverTrigger>
               <PopoverContent align="end" className="w-[420px] p-5">
                 <div className="space-y-3">
-                  {[
-                    { key: "categoryTotals", checked: false },
-                    { key: "productTotals", checked: false },
-                    { key: "hourTotals", checked: false },
-                    { key: "hourTotalsPerUser", checked: false },
-                  ].map((row) => (
-                    <div key={row.key} className="flex items-center justify-between">
-                      <Label className="text-sm text-foreground">{t(row.key as never)} :</Label>
-                      <Checkbox defaultChecked={row.checked} />
+                  {(["categoryTotals", "productTotals", "hourTotals", "hourTotalsPerUser"] as const).map((rowKey) => (
+                    <div key={rowKey} className="flex items-center justify-between">
+                      <Label className="text-sm text-foreground">{t(rowKey)} :</Label>
+                      <Checkbox
+                        checked={reportSectionVisibility[rowKey]}
+                        onCheckedChange={(checked) =>
+                          setReportSectionVisibility((prev) => ({ ...prev, [rowKey]: checked === true }))
+                        }
+                      />
                     </div>
                   ))}
                   <div className="pt-2 border-t border-border" />
                   <div className="flex items-center justify-between">
                     <Label className="text-sm text-foreground">{t("dailyAutoCreate")} :</Label>
-                    <Checkbox />
+                    <Checkbox
+                      checked={dailyAutoCreateEnabled}
+                      onCheckedChange={(checked) => setDailyAutoCreateEnabled(checked === true)}
+                    />
                   </div>
+                  {dailyAutoCreateEnabled && (
+                    <div className="space-y-2 rounded-sm border border-border p-2">
+                      <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+                        <Label className="text-sm text-foreground">{t("autoCreateHour")} :</Label>
+                        <Select value={dailyAutoCreateHour} onValueChange={setDailyAutoCreateHour}>
+                          <SelectTrigger className="h-8 w-24">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.from({ length: 24 }).map((_, i) => {
+                              const hour = String(i).padStart(2, "0");
+                              return (
+                                <SelectItem key={hour} value={hour}>
+                                  {hour}:00
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+                        <Label className="whitespace-nowrap text-sm text-foreground">{t("sendEmailTo")} :</Label>
+                        <Input
+                          type="email"
+                          value={dailyAutoCreateEmail}
+                          onChange={(e) => setDailyAutoCreateEmail(e.target.value)}
+                          className="h-8 w-64"
+                          placeholder="name@example.com"
+                        />
+                      </div>
+                    </div>
+                  )}
                   <div className="pt-2 flex justify-center">
-                    <Button variant="ghost" size="sm" className="gap-2">
-                      <Save className="h-4 w-4" /> {t("save")}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-2"
+                      disabled={reportSettingsSaving}
+                      onClick={() => void saveReportSettings()}
+                    >
+                      {reportSettingsSaving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4" />
+                      )}{" "}
+                      {t("save")}
                     </Button>
                   </div>
                 </div>
@@ -2088,21 +2462,45 @@ const Reports = () => {
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent>{registerSelectContent}</SelectContent>
+                    <SelectContent>{registerSelectContentNoAll}</SelectContent>
                   </Select>
                 </div>
                 <div className="grid grid-cols-[140px_1fr] items-center gap-4">
                   <Label className="text-sm font-medium">{t("createUntil")} :</Label>
-                  <Select defaultValue="current"><SelectTrigger><SelectValue /></SelectTrigger>
+                  <Select value={zCreateUntilMode} onValueChange={(v) => setZCreateUntilMode(v as "current" | "manual")}><SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="current">{t("currentTime")}</SelectItem>
                       <SelectItem value="manual">{t("manualTime")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
+                {zCreateUntilMode === "manual" && (
+                  <div className="grid grid-cols-[140px_1fr] items-center gap-4">
+                    <div />
+                    <div className="flex items-center gap-2">
+                      <Select value={zCreateManualHour} onValueChange={setZCreateManualHour}>
+                        <SelectTrigger className="w-24"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Array.from({ length: 25 }).map((_, i) => (
+                            <SelectItem key={`z-create-hour-${i}`} value={String(i)}>
+                              {String(i).padStart(2, "0")}:00
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <DatePickerField value={zCreateManualDate} onChange={setZCreateManualDate} />
+                    </div>
+                  </div>
+                )}
                 <div className="pt-3 flex justify-center">
-                  <Button className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6">
-                    <Cloud className="h-4 w-4" /> {t("createPreview")}
+                  <Button
+                    type="button"
+                    disabled={zPreviewLoading}
+                    onClick={() => void openZPreviewReport()}
+                    className="gap-2 bg-gradient-primary text-primary-foreground hover:opacity-90 px-6"
+                  >
+                    {zPreviewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}{" "}
+                    {t("createPreview")}
                   </Button>
                 </div>
               </div>
@@ -2161,6 +2559,81 @@ const Reports = () => {
         </div>
       )}
 
+      <Dialog open={zPreviewOpen} onOpenChange={setZPreviewOpen}>
+        <DialogContent
+          data-z-print-content
+          className={cn(
+            "w-[96vw] max-w-3xl gap-0 overflow-hidden border-border bg-muted p-0 text-foreground shadow-2xl sm:rounded-lg",
+            "[&>button]:text-muted-foreground [&>button]:hover:bg-accent [&>button]:hover:text-foreground",
+            "[&>button]:top-[9px]",
+          )}
+        >
+          <DialogTitle className="sr-only">{t("zReports")}</DialogTitle>
+          <div className="relative flex h-[56px] items-center justify-center border-b border-border bg-card px-4">
+            <div className="flex items-center gap-2 text-foreground">
+              <div className="absolute flex left-0 pl-10 gap-2">
+                {!zReportSaved ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => void saveZReport()}
+                    disabled={zReportSaving}
+                    className="h-8 gap-2"
+                  >
+                    {zReportSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    {lang === "nl" ? "Opslaan" : "Save"}
+                  </Button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      title={t("print")}
+                      className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={() => printSavedZReport()}
+                    >
+                      <Printer className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title={t("reportPdfAction")}
+                      disabled={zPdfWorking}
+                      className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                      onClick={() => void downloadSavedZPdf()}
+                    >
+                      {zPdfWorking ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <FileText className="h-4 w-4" />}
+                    </button>
+                  </>
+                )}
+              </div>
+              <span className="text-3xl">{lang === "nl" ? "Z rapport" : "Z report"}</span>
+            </div>
+          </div>
+          <div data-z-print-scroll className="max-h-[80vh] overflow-y-auto bg-muted/70 p-4 sm:p-5 print:bg-white print:p-0">
+            <div id={Z_REPORT_PRINT_AREA_ID} className="mx-auto w-fit min-w-[460px] border border-neutral-400 bg-white px-6 py-5 text-[#111]">
+                <div className="mx-auto w-fit font-mono text-[15px] leading-[1.35]">
+                  {(zPreviewPayload?.lines || []).map((line, idx) => {
+                    const displayLine = formatZReportLineForDisplay(line, zReportSaved);
+                    const centeredTitle = isZPreviewCenteredTitle(displayLine);
+                    const centeredHeader = isZPreviewHeaderLine(displayLine);
+                    return (
+                      <div
+                        key={`z-preview-line-${idx}`}
+                        className={cn(
+                          "whitespace-pre",
+                          centeredTitle || centeredHeader ? "text-center" : "",
+                          centeredTitle || centeredHeader ? "font-bold" : "",
+                        )}
+                      >
+                        {centeredTitle ? displayLine.trim() : displayLine}
+                      </div>
+                    );
+                  })}
+                </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={emptiesReportOpen} onOpenChange={setEmptiesReportOpen}>
         <DialogContent
           data-empties-print-content
@@ -2180,12 +2653,18 @@ const Reports = () => {
             >
               <Printer className="h-5 w-5" />
             </button>
-            <button type="button" title={t("reportPdfAction")} className="flex items-center justify-center text-muted-foreground opacity-40" disabled>
-              <FileText className="h-5 w-5" />
+            <button
+              type="button"
+              title={t("reportPdfAction")}
+              disabled={emptiesPdfWorking}
+              className="flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => void downloadEmptiesPdf()}
+            >
+              {emptiesPdfWorking ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden /> : <FileText className="h-5 w-5" />}
             </button>
           </div>
           <div data-empties-print-scroll className="h-full overflow-y-auto bg-muted/60 p-4 sm:p-5 print:bg-white print:p-0">
-            <div id="empties-report-print-area" className="mx-auto min-h-full max-w-4xl bg-card px-8 pb-10 pt-8 text-foreground sm:px-10">
+            <div id={EMPTIES_REPORT_PRINT_AREA_ID} className="mx-auto min-h-full max-w-4xl bg-card px-8 pb-10 pt-8 text-foreground sm:px-10">
               <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                 <div>
                   <p className="text-2xl font-bold leading-tight text-foreground">{t("reportDefaultBusinessName")}</p>
@@ -2228,33 +2707,33 @@ const Reports = () => {
                         const val = totals[col.key as keyof EmptiesTotals];
                         const rowsToShow = section.rows.slice(0, 8);
                         return (
-                        <div key={`${section.key}-${col.key}`} className="rounded border border-border px-4 py-3">
-                          <p className="text-center text-foreground">{col.label}</p>
-                          <div className="mt-3 space-y-1 text-xs text-foreground">
-                            {rowsToShow.length > 0 ? (
-                              rowsToShow.map((r) => {
-                                const rowVal = Number(r[col.key as keyof EmptiesTotals]) || 0;
-                                return (
-                                  <div key={`${section.key}-${col.key}-${r.label}`} className="flex items-center justify-between gap-2">
-                                    <span className="truncate">{r.label}</span>
-                                    <span className="tabular-nums">{formatPeriodicReportMoney(rowVal)}</span>
-                                  </div>
-                                );
-                              })
-                            ) : (
-                              <div className="text-muted-foreground">—</div>
-                            )}
+                          <div key={`${section.key}-${col.key}`} className="rounded border border-border px-4 py-3">
+                            <p className="text-center text-foreground">{col.label}</p>
+                            <div className="mt-3 space-y-1 text-sm leading-6 text-foreground">
+                              {rowsToShow.length > 0 ? (
+                                rowsToShow.map((r) => {
+                                  const rowVal = Number(r[col.key as keyof EmptiesTotals]) || 0;
+                                  return (
+                                    <div key={`${section.key}-${col.key}-${r.label}`} className="flex min-h-[20px] items-center justify-between gap-2">
+                                      <span className="truncate">{r.label}</span>
+                                      <span className="tabular-nums">{formatPeriodicReportMoney(rowVal)}</span>
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <div className="text-muted-foreground">—</div>
+                              )}
+                            </div>
+                            <p className="mt-3 text-right text-sm text-foreground">
+                              {emptiesReportType === "liters"
+                                ? `Totaal Liter : ${formatPeriodicReportMoney(val)}`
+                                : emptiesReportType === "kg"
+                                  ? `${t("kgQty")} : ${formatPeriodicReportMoney(val)}`
+                                  : emptiesReportType === "meters"
+                                    ? `${t("metersQty")} : ${formatPeriodicReportMoney(val)}`
+                                    : `${t("piecesQty")} : ${formatPeriodicReportMoney(val)}`}
+                            </p>
                           </div>
-                          <p className="mt-3 text-right text-sm text-foreground">
-                            {emptiesReportType === "liters"
-                              ? `Totaal Liter : ${formatPeriodicReportMoney(val)}`
-                              : emptiesReportType === "kg"
-                                ? `${t("kgQty")} : ${formatPeriodicReportMoney(val)}`
-                                : emptiesReportType === "meters"
-                                  ? `${t("metersQty")} : ${formatPeriodicReportMoney(val)}`
-                                  : `${t("piecesQty")} : ${formatPeriodicReportMoney(val)}`}
-                          </p>
-                        </div>
                         );
                       })}
                     </div>
@@ -2570,75 +3049,75 @@ const Reports = () => {
               id={SUPPLIER_REPORT_PRINT_AREA_ID}
               className="min-h-full bg-card px-8 pb-10 pt-8 text-foreground sm:px-10"
             >
-            <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
-              <div>
-                <p className="text-2xl font-bold leading-tight text-foreground">{t("reportDefaultBusinessName")}</p>
-                <p className="mt-2 text-lg text-muted-foreground">{t("supplierReportTitle")}</p>
-                <p className="mt-3 break-words text-base font-semibold leading-snug text-foreground">
-                  {selectedSupplierName}
-                </p>
+              <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
+                <div>
+                  <p className="text-2xl font-bold leading-tight text-foreground">{t("reportDefaultBusinessName")}</p>
+                  <p className="mt-2 text-lg text-muted-foreground">{t("supplierReportTitle")}</p>
+                  <p className="mt-3 break-words text-base font-semibold leading-snug text-foreground">
+                    {selectedSupplierName}
+                  </p>
+                </div>
+                <div className="space-y-2 text-right text-sm text-muted-foreground">
+                  <p>
+                    {reportHourLabel(supplierFromHour)} {format(fromDate, "dd-MM-yyyy")}{" "}
+                    {t("reportPeriodThrough")} {reportHourLabel(supplierToHour)} {format(toDate, "dd-MM-yyyy")}
+                  </p>
+                  <p>
+                    {t("reportPrintedOn")}{" "}
+                    {supplierReportOpenedAt ? format(supplierReportOpenedAt, "HH:mm dd-MM-yyyy") : "—"}
+                  </p>
+                  <p>
+                    {t("reportBy")} {user?.email ?? "—"}
+                  </p>
+                </div>
               </div>
-              <div className="space-y-2 text-right text-sm text-muted-foreground">
-                <p>
-                  {reportHourLabel(supplierFromHour)} {format(fromDate, "dd-MM-yyyy")}{" "}
-                  {t("reportPeriodThrough")} {reportHourLabel(supplierToHour)} {format(toDate, "dd-MM-yyyy")}
-                </p>
-                <p>
-                  {t("reportPrintedOn")}{" "}
-                  {supplierReportOpenedAt ? format(supplierReportOpenedAt, "HH:mm dd-MM-yyyy") : "—"}
-                </p>
-                <p>
-                  {t("reportBy")} {user?.email ?? "—"}
-                </p>
-              </div>
-            </div>
 
-            <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2">
-              <div className="supplier-report-stat-box flex flex-col rounded-md border border-border bg-background dark:bg-muted/40">
-                <p className="pt-4 text-center text-sm font-medium text-foreground">{t("categoryTotals")}</p>
-                <div className="space-y-1 px-4 pb-1 pt-2 text-sm">
-                  {supplierReportPayload?.categoryRows?.length ? (
-                    supplierReportPayload.categoryRows.map((r) => (
-                      <div key={`supplier-cat-${r.label}`} className="flex justify-between gap-2 tabular-nums">
-                        <span className="break-words text-left">
-                          <span className="inline-block min-w-[100px]">{r.qtyLabel ?? r.qty}</span>
-                          <span>{r.label}</span>
-                        </span>
-                        <span>{formatPeriodicReportMoney(r.amount)}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-muted-foreground">—</p>
-                  )}
+              <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2">
+                <div className="supplier-report-stat-box flex flex-col rounded-md border border-border bg-background dark:bg-muted/40">
+                  <p className="pt-4 text-center text-sm font-medium text-foreground">{t("categoryTotals")}</p>
+                  <div className="space-y-1 px-4 pb-1 pt-2 text-sm">
+                    {supplierReportPayload?.categoryRows?.length ? (
+                      supplierReportPayload.categoryRows.map((r) => (
+                        <div key={`supplier-cat-${r.label}`} className="flex justify-between gap-2 tabular-nums">
+                          <span className="break-words text-left">
+                            <span className="inline-block min-w-[100px]">{r.qtyLabel ?? r.qty}</span>
+                            <span>{r.label}</span>
+                          </span>
+                          <span>{formatPeriodicReportMoney(r.amount)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-muted-foreground">—</p>
+                    )}
+                  </div>
+                  <p className="pb-4 pr-4 text-right text-sm text-foreground">
+                    {t("total")} :{" "}
+                    <span className="text-muted-foreground">{formatPeriodicReportMoney(supplierReportPayload?.totals?.amount ?? 0)}</span>
+                  </p>
                 </div>
-                <p className="pb-4 pr-4 text-right text-sm text-foreground">
-                  {t("total")} :{" "}
-                  <span className="text-muted-foreground">{formatPeriodicReportMoney(supplierReportPayload?.totals?.amount ?? 0)}</span>
-                </p>
-              </div>
-              <div className="supplier-report-stat-box flex flex-col rounded-md border border-border bg-background dark:bg-muted/40">
-                <p className="pt-4 text-center text-sm font-medium text-foreground">{t("productTotals")}</p>
-                <div className="space-y-1 px-4 pb-1 pt-2 text-sm">
-                  {supplierReportPayload?.rows?.length ? (
-                    supplierReportPayload.rows.map((r) => (
-                      <div key={`supplier-product-${r.label}`} className="flex justify-between gap-2 tabular-nums">
-                        <span className="break-words text-left">
-                          <span className="inline-block min-w-[100px]">{r.qtyLabel ?? r.qty}</span>
-                          <span>{r.label}</span>
-                        </span>
-                        <span>{formatPeriodicReportMoney(r.amount)}</span>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-muted-foreground">—</p>
-                  )}
+                <div className="supplier-report-stat-box flex flex-col rounded-md border border-border bg-background dark:bg-muted/40">
+                  <p className="pt-4 text-center text-sm font-medium text-foreground">{t("productTotals")}</p>
+                  <div className="space-y-1 px-4 pb-1 pt-2 text-sm">
+                    {supplierReportPayload?.rows?.length ? (
+                      supplierReportPayload.rows.map((r) => (
+                        <div key={`supplier-product-${r.label}`} className="flex justify-between gap-2 tabular-nums">
+                          <span className="break-words text-left">
+                            <span className="inline-block min-w-[100px]">{r.qtyLabel ?? r.qty}</span>
+                            <span>{r.label}</span>
+                          </span>
+                          <span>{formatPeriodicReportMoney(r.amount)}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-muted-foreground">—</p>
+                    )}
+                  </div>
+                  <p className="pb-4 pr-4 text-right text-sm text-foreground">
+                    {t("total")} :{" "}
+                    <span className="text-muted-foreground">{formatPeriodicReportMoney(supplierReportPayload?.totals?.amount ?? 0)}</span>
+                  </p>
                 </div>
-                <p className="pb-4 pr-4 text-right text-sm text-foreground">
-                  {t("total")} :{" "}
-                  <span className="text-muted-foreground">{formatPeriodicReportMoney(supplierReportPayload?.totals?.amount ?? 0)}</span>
-                </p>
               </div>
-            </div>
             </div>
           </div>
         </DialogContent>
@@ -2946,29 +3425,29 @@ const Reports = () => {
                             ) : null}
                             {isExpanded && !loadingLines && !rowExpandError && orderPayload && orderPayload.items.length > 0
                               ? orderPayload.items.map((item, idx) => {
-                                  const name = (item.product?.name || "").trim() || "—";
-                                  const isLastLine = idx === orderPayload.items.length - 1;
-                                  return (
-                                    <TableRow
-                                      key={`${row.id}-${item.id}`}
-                                      className={cn(
-                                        "hover:bg-transparent border-b-0",
-                                        isLastLine && "border-b border-border",
-                                      )}
-                                      data-ticket-print-divider={isLastLine ? "" : undefined}
-                                    >
-                                      <TableCell colSpan={4} className="py-1.5 pl-10 text-sm align-top text-foreground">
-                                        <span className="tabular-nums text-muted-foreground">{item.quantity}</span>
-                                        <span className="text-muted-foreground"> x </span>
-                                        <span>{name}</span>
-                                      </TableCell>
-                                      <TableCell className="py-1.5 text-sm align-top tabular-nums text-right text-foreground whitespace-nowrap">
-                                        {formatTicketLineUnitPrice(item.price)}
-                                      </TableCell>
-                                      <TableCell colSpan={4} className="py-1.5 align-top" />
-                                    </TableRow>
-                                  );
-                                })
+                                const name = (item.product?.name || "").trim() || "—";
+                                const isLastLine = idx === orderPayload.items.length - 1;
+                                return (
+                                  <TableRow
+                                    key={`${row.id}-${item.id}`}
+                                    className={cn(
+                                      "hover:bg-transparent border-b-0",
+                                      isLastLine && "border-b border-border",
+                                    )}
+                                    data-ticket-print-divider={isLastLine ? "" : undefined}
+                                  >
+                                    <TableCell colSpan={4} className="py-1.5 pl-10 text-sm align-top text-foreground">
+                                      <span className="tabular-nums text-muted-foreground">{item.quantity}</span>
+                                      <span className="text-muted-foreground"> x </span>
+                                      <span>{name}</span>
+                                    </TableCell>
+                                    <TableCell className="py-1.5 text-sm align-top tabular-nums text-right text-foreground whitespace-nowrap">
+                                      {formatTicketLineUnitPrice(item.price)}
+                                    </TableCell>
+                                    <TableCell colSpan={4} className="py-1.5 align-top" />
+                                  </TableRow>
+                                );
+                              })
                               : null}
                             {isExpanded && !loadingLines && !rowExpandError && orderPayload && orderPayload.items.length === 0 ? (
                               <TableRow className="hover:bg-transparent border-b border-border" data-ticket-print-divider="">
