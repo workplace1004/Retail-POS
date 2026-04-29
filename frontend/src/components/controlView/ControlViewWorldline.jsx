@@ -41,13 +41,7 @@ export function ControlViewWorldline({
   }, []);
 
   return (
-    <div className="relative min-h-[570px] rounded-xl border border-pos-border bg-pos-panel/30 p-4">
-      <p className="text-center text-sm text-pos-muted mb-4 max-w-xl mx-auto leading-relaxed">
-        {tr(
-          'control.worldline.inboundExplanation',
-          'RX5000 CTEP usually connects to the cash register: set this POS IP and the listen port on the terminal, not the other way around.',
-        )}
-      </p>
+    <div className="relative min-h-[570px] max-h-full rounded-xl border border-pos-border !overflow-y-auto bg-pos-panel/30 p-4">
       <div className="flex flex-col gap-3 mb-4 max-w-xl mx-auto">
         <label className="flex items-start gap-3 cursor-pointer select-none text-pos-text">
           <input
@@ -181,7 +175,7 @@ export function ControlViewWorldline({
           {tr('control.save', 'Save')}
         </button>
       </div>
-      <div className="shrink-0 absolute bottom-0">
+      <div className="shrink-0  bottom-0">
         <SmallKeyboardWithNumpad value={worldlineKeyboardValue} onChange={worldlineKeyboardOnChange} />
       </div>
     </div>
