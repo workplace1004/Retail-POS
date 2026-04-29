@@ -601,9 +601,8 @@ app.get('/api/webpanel/reports/stock', async (req, res) => {
     });
     const rowsBase = products.map((p) => {
       const { qty, qtyLabel } = parseProductStockQty(p.stock, !!p.weegschaal, p.unit);
-      const stockNotificationEnabled = p.stockNotification !== false;
       const notifyThreshold = parseNumberLoose(p.notificationSoldOutPieces);
-      const isStockLevel = stockNotificationEnabled && qty <= notifyThreshold;
+      const isStockLevel = qty <= notifyThreshold;
       const salePrice = Number(p.price) || 0;
       const purchasePrice = parseMoneyAmountForReport(p.purchasePriceIncl) || parseMoneyAmountForReport(p.purchasePriceExcl);
       const totalSale = Math.round(qty * salePrice * 100) / 100;

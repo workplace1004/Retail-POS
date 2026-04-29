@@ -142,6 +142,7 @@ export default function App() {
   const [showInWaitingButton, setShowInWaitingButton] = useState(false);
   const [turnOnStockWarningEnabled, setTurnOnStockWarningEnabled] = useState(true);
   const [lowStockWarning, setLowStockWarning] = useState(null);
+  const [stockZeroErrorOpen, setStockZeroErrorOpen] = useState(false);
   const [lowStockPrintBusy, setLowStockPrintBusy] = useState(false);
   const [lowStockPrintSuccessOpen, setLowStockPrintSuccessOpen] = useState(false);
   const [lowStockPrintFailToast, setLowStockPrintFailToast] = useState('');
@@ -475,7 +476,11 @@ export default function App() {
   const handleAddProductWithSelectedTable = useCallback(
     async (product) => {
       const toNumberOrNull = (value) => {
-        const parsed = Number(String(value ?? '').trim().replace(',', '.'));
+        const raw = String(value ?? '').trim();
+        if (!raw) return null;
+        const match = raw.match(/-?\d+(?:[.,]\d+)?/);
+        if (!match) return null;
+        const parsed = Number(match[0].replace(',', '.'));
         return Number.isFinite(parsed) ? parsed : null;
       };
       const shouldWarnLowStock = (candidate) => {
@@ -507,6 +512,26 @@ export default function App() {
         }
       }
 
+      const resolvedStock = toNumberOrNull(resolvedProduct?.stock);
+      const qty = Math.max(1, parseInt(quantityInput, 10) || 1);
+      const alreadyOrderedQty = Array.isArray(currentOrder?.items)
+        ? currentOrder.items.reduce((sum, item) => {
+            const sameProduct = String(item?.productId ?? '') === String(resolvedProduct?.id ?? '');
+            if (!sameProduct) return sum;
+            return sum + Math.max(0, Number(item?.quantity) || 0);
+          }, 0)
+        : 0;
+      const availableStock = resolvedStock != null ? (resolvedStock - alreadyOrderedQty) : null;
+
+      if (availableStock != null && availableStock <= 0) {
+        setStockZeroErrorOpen(true);
+        return false;
+      }
+      if (availableStock != null && qty > availableStock) {
+        setStockZeroErrorOpen(true);
+        return false;
+      }
+
       if (shouldWarnLowStock(resolvedProduct)) {
         const threshold = toNumberOrNull(resolvedProduct?.notificationSoldOutPieces);
         const stock = toNumberOrNull(resolvedProduct?.stock);
@@ -520,7 +545,6 @@ export default function App() {
         setLowStockPrintFailToast('');
       }
 
-      const qty = Math.max(1, parseInt(quantityInput, 10) || 1);
       setQuantityInput('');
 
       if (resolvedProduct?.weegschaal) {
@@ -537,7 +561,7 @@ export default function App() {
 
       return addItemToOrder(resolvedProduct, qty);
     },
-    [addItemToOrder, quantityInput, turnOnStockWarningEnabled]
+    [addItemToOrder, quantityInput, turnOnStockWarningEnabled, currentOrder]
   );
 
   const barcodeScanPaused =
@@ -807,6 +831,23 @@ export default function App() {
                   setLowStockWarning(null);
                   setLowStockPrintFailToast('');
                 }}
+              >
+                {t('ok', 'OK')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {stockZeroErrorOpen ? (
+        <div className="fixed inset-0 z-[111] flex items-center justify-center bg-black/50">
+          <div className="w-[min(90vw,420px)] rounded-xl border border-red-500/60 bg-red-50 p-5 text-red-950 shadow-2xl dark:bg-red-950/30 dark:text-red-100">
+            <h3 className="text-lg font-semibold text-red-700 dark:text-red-300">{t('warning', 'Warning')}</h3>
+            <p className="mt-3 text-sm text-red-800 dark:text-red-200">Stock is 0</p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                className="rounded-lg bg-red-600 px-4 py-2 text-white hover:bg-red-700 active:bg-red-700"
+                onClick={() => setStockZeroErrorOpen(false)}
               >
                 {t('ok', 'OK')}
               </button>
