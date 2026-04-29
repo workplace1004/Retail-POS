@@ -576,7 +576,12 @@ function parseNumberLoose(val) {
 app.get('/api/webpanel/reports/stock', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
   if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
-  const sort = String(req.query.sort || 'product').toLowerCase() === 'category' ? 'category' : 'product';
+  const rawSort = String(req.query.sort || 'product').toLowerCase();
+  const sort = rawSort === 'category'
+    ? 'category'
+    : rawSort === 'smallest-stock'
+      ? 'smallest-stock'
+      : 'product';
   const display = String(req.query.display || 'all').toLowerCase();
   const vat = String(req.query.vat || 'incl').toLowerCase() === 'excl' ? 'excl' : 'incl';
   try {
@@ -594,8 +599,11 @@ app.get('/api/webpanel/reports/stock', async (req, res) => {
           ? [{ category: { name: 'asc' } }, { sortOrder: 'asc' }, { name: 'asc' }]
           : [{ name: 'asc' }],
     });
-    const rows = products.map((p) => {
+    const rowsBase = products.map((p) => {
       const { qty, qtyLabel } = parseProductStockQty(p.stock, !!p.weegschaal, p.unit);
+      const stockNotificationEnabled = p.stockNotification !== false;
+      const notifyThreshold = parseNumberLoose(p.notificationSoldOutPieces);
+      const isStockLevel = stockNotificationEnabled && qty <= notifyThreshold;
       const salePrice = Number(p.price) || 0;
       const purchasePrice = parseMoneyAmountForReport(p.purchasePriceIncl) || parseMoneyAmountForReport(p.purchasePriceExcl);
       const totalSale = Math.round(qty * salePrice * 100) / 100;
@@ -607,6 +615,7 @@ app.get('/api/webpanel/reports/stock', async (req, res) => {
         qtyLabel,
         productName: p.name || '',
         categoryName: p.category?.name || '',
+        isStockLevel,
         salePrice: Math.round(salePrice * 100) / 100,
         purchasePrice: Math.round(purchasePrice * 100) / 100,
         totalSale,
@@ -614,6 +623,15 @@ app.get('/api/webpanel/reports/stock', async (req, res) => {
         margin,
       };
     });
+    const rowsFiltered = display === 'stock-level'
+      ? rowsBase.filter((r) => r.isStockLevel)
+      : rowsBase;
+    const rows = sort === 'smallest-stock'
+      ? [...rowsFiltered].sort((a, b) => {
+          if (a.qty !== b.qty) return a.qty - b.qty;
+          return String(a.productName || '').localeCompare(String(b.productName || ''));
+        })
+      : rowsFiltered;
     const openSale = Math.round(rows.reduce((s, r) => s + r.totalSale, 0) * 100) / 100;
     const openPurchase = Math.round(rows.reduce((s, r) => s + r.totalPurchase, 0) * 100) / 100;
     return res.json({ sort, display, vat, rows, totals: { openSale, openPurchase } });

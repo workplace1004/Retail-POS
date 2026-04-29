@@ -344,6 +344,20 @@
 
 /* Stock report modal: print only #stock-report-print-area */
 @media print {
+  html:has(body.print-stock-report-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-stock-report-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-stock-report-only > * {
+    display: none !important;
+  }
+  body.print-stock-report-only [data-stock-print-content] {
+    display: block !important;
+  }
   body.print-stock-report-only * {
     visibility: hidden;
   }
@@ -385,12 +399,14 @@
     display: block !important;
     overflow: visible !important;
     height: auto !important;
+    min-height: 0 !important;
     max-height: none !important;
   }
 
   body.print-stock-report-only [data-stock-print-scroll] {
     overflow: visible !important;
     height: auto !important;
+    min-height: 0 !important;
     max-height: none !important;
   }
 

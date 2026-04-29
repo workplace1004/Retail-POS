@@ -106,6 +106,8 @@ export function ControlViewDeviceSettingsModal(props) {
     setDeviceDisableCashButtonInPayment,
     deviceOpenPriceWithoutPopup,
     setDeviceOpenPriceWithoutPopup,
+    deviceTurnOnStockWarning,
+    setDeviceTurnOnStockWarning,
     deviceOpenCashDrawerAfterOrder,
     setDeviceOpenCashDrawerAfterOrder,
     deviceAutoReturnToCounterSale,
@@ -243,6 +245,10 @@ export function ControlViewDeviceSettingsModal(props) {
                     <label className="flex items-center gap-3 cursor-pointer">
                       <span className="text-pos-text min-w-[350px] max-w-[350px]">{tr('control.device.general.openPriceWithoutPopup', 'Open price without popup and without comma:')}</span>
                       <input type="checkbox" checked={deviceOpenPriceWithoutPopup} onChange={(e) => setDeviceOpenPriceWithoutPopup(e.target.checked)} className="w-9 h-9 rounded border-gray-300" />
+                    </label>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <span className="text-pos-text min-w-[350px] max-w-[350px]">{tr('control.device.general.turnOnStockWarning', 'Turn on Stock Warning:')}</span>
+                      <input type="checkbox" checked={deviceTurnOnStockWarning} onChange={(e) => setDeviceTurnOnStockWarning(e.target.checked)} className="w-9 h-9 rounded border-gray-300" />
                     </label>
                   </div>
                   <div className="flex flex-col gap-4">

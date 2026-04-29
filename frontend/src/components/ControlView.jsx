@@ -648,6 +648,7 @@ export function ControlView({
   const [deviceAutoReturnToTablePlan, setDeviceAutoReturnToTablePlan] = useState(false);
   const [deviceDisableCashButtonInPayment, setDeviceDisableCashButtonInPayment] = useState(false);
   const [deviceOpenPriceWithoutPopup, setDeviceOpenPriceWithoutPopup] = useState(false);
+  const [deviceTurnOnStockWarning, setDeviceTurnOnStockWarning] = useState(true);
   const [deviceOpenCashDrawerAfterOrder, setDeviceOpenCashDrawerAfterOrder] = useState(true);
   const [deviceAutoReturnToCounterSale, setDeviceAutoReturnToCounterSale] = useState(false);
   const [deviceAskSendToKitchen, setDeviceAskSendToKitchen] = useState(false);
@@ -2947,6 +2948,7 @@ export function ControlView({
     if (saved.autoReturnToTablePlan != null) setDeviceAutoReturnToTablePlan(!!saved.autoReturnToTablePlan);
     if (saved.disableCashButtonInPayment != null) setDeviceDisableCashButtonInPayment(!!saved.disableCashButtonInPayment);
     if (saved.openPriceWithoutPopup != null) setDeviceOpenPriceWithoutPopup(!!saved.openPriceWithoutPopup);
+    if (saved.turnOnStockWarning != null) setDeviceTurnOnStockWarning(!!saved.turnOnStockWarning);
     if (saved.openCashDrawerAfterOrder != null) setDeviceOpenCashDrawerAfterOrder(!!saved.openCashDrawerAfterOrder);
     if (saved.autoReturnToCounterSale != null) setDeviceAutoReturnToCounterSale(!!saved.autoReturnToCounterSale);
     if (saved.askSendToKitchen != null) setDeviceAskSendToKitchen(!!saved.askSendToKitchen);
@@ -3099,6 +3101,7 @@ export function ControlView({
         autoReturnToTablePlan: deviceAutoReturnToTablePlan,
         disableCashButtonInPayment: deviceDisableCashButtonInPayment,
         openPriceWithoutPopup: deviceOpenPriceWithoutPopup,
+        turnOnStockWarning: deviceTurnOnStockWarning,
         openCashDrawerAfterOrder: deviceOpenCashDrawerAfterOrder,
         autoReturnToCounterSale: deviceAutoReturnToCounterSale,
         askSendToKitchen: deviceAskSendToKitchen,
@@ -6686,6 +6689,8 @@ export function ControlView({
         setDeviceDisableCashButtonInPayment={setDeviceDisableCashButtonInPayment}
         deviceOpenPriceWithoutPopup={deviceOpenPriceWithoutPopup}
         setDeviceOpenPriceWithoutPopup={setDeviceOpenPriceWithoutPopup}
+        deviceTurnOnStockWarning={deviceTurnOnStockWarning}
+        setDeviceTurnOnStockWarning={setDeviceTurnOnStockWarning}
         deviceOpenCashDrawerAfterOrder={deviceOpenCashDrawerAfterOrder}
         setDeviceOpenCashDrawerAfterOrder={setDeviceOpenCashDrawerAfterOrder}
         deviceAutoReturnToCounterSale={deviceAutoReturnToCounterSale}

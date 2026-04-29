@@ -140,9 +140,11 @@ export default function App() {
   const scaleWeightResolveRef = useRef(null);
   const [scaleWeightProduct, setScaleWeightProduct] = useState(null);
   const [showInWaitingButton, setShowInWaitingButton] = useState(false);
+  const [turnOnStockWarningEnabled, setTurnOnStockWarningEnabled] = useState(true);
   const [lowStockWarning, setLowStockWarning] = useState(null);
   const [lowStockPrintBusy, setLowStockPrintBusy] = useState(false);
-  const [lowStockPrintError, setLowStockPrintError] = useState('');
+  const [lowStockPrintSuccessOpen, setLowStockPrintSuccessOpen] = useState(false);
+  const [lowStockPrintFailToast, setLowStockPrintFailToast] = useState('');
   const UA_TIMEZONE = 'Europe/Kyiv';
   const [time, setTime] = useState(() => new Date().toLocaleTimeString('en-GB', { timeZone: UA_TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false }));
   const {
@@ -207,6 +209,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!lowStockPrintFailToast) return undefined;
+    const id = window.setTimeout(() => setLowStockPrintFailToast(''), 3500);
+    return () => window.clearTimeout(id);
+  }, [lowStockPrintFailToast]);
+
+  useEffect(() => {
     if (!isLicenseEnforcementEnabled()) return;
     let cancelled = false;
     (async () => {
@@ -257,8 +265,14 @@ export default function App() {
         !!saved.ordersBookTableToWaiting &&
         !!saved.ordersFastCustomerName;
       setShowInWaitingButton(!!allFour);
+      if (saved && typeof saved === 'object' && saved.turnOnStockWarning != null) {
+        setTurnOnStockWarningEnabled(!!saved.turnOnStockWarning);
+      } else {
+        setTurnOnStockWarningEnabled(true);
+      }
     } catch {
       setShowInWaitingButton(false);
+      setTurnOnStockWarningEnabled(true);
     }
   }, []);
 
@@ -465,6 +479,7 @@ export default function App() {
         return Number.isFinite(parsed) ? parsed : null;
       };
       const shouldWarnLowStock = (candidate) => {
+        if (!turnOnStockWarningEnabled) return false;
         const stockNotificationEnabled =
           candidate?.stockNotification !== false &&
           String(candidate?.stockNotification ?? '').toLowerCase() !== 'false';
@@ -502,7 +517,7 @@ export default function App() {
           stock: stock ?? 0,
           threshold: threshold ?? 0,
         });
-        setLowStockPrintError('');
+        setLowStockPrintFailToast('');
       }
 
       const qty = Math.max(1, parseInt(quantityInput, 10) || 1);
@@ -522,7 +537,7 @@ export default function App() {
 
       return addItemToOrder(resolvedProduct, qty);
     },
-    [addItemToOrder, quantityInput]
+    [addItemToOrder, quantityInput, turnOnStockWarningEnabled]
   );
 
   const barcodeScanPaused =
@@ -745,9 +760,6 @@ export default function App() {
             <p className="mt-3 text-sm text-red-800 dark:text-red-200">
               {`${lowStockWarning.name} is out of stock.`}
             </p>
-            {lowStockPrintError ? (
-              <p className="mt-2 text-xs text-red-700 dark:text-red-300">{lowStockPrintError}</p>
-            ) : null}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -756,7 +768,7 @@ export default function App() {
                 onClick={async () => {
                   if (!lowStockWarning || lowStockPrintBusy) return;
                   setLowStockPrintBusy(true);
-                  setLowStockPrintError('');
+                  setLowStockPrintFailToast('');
                   try {
                     const lines = [
                       '*** LOW STOCK WARNING ***',
@@ -776,8 +788,10 @@ export default function App() {
                     if (!res.ok || data?.success !== true || data?.data?.printed !== true) {
                       throw new Error(data?.error || t('control.reports.printFailed', 'Could not print on the main printer.'));
                     }
+                    setLowStockWarning(null);
+                    setLowStockPrintSuccessOpen(true);
                   } catch (error) {
-                    setLowStockPrintError(error?.message || t('control.reports.printFailed', 'Could not print on the main printer.'));
+                    setLowStockPrintFailToast(error?.message || t('control.reports.printFailed', 'Could not print on the main printer.'));
                   } finally {
                     setLowStockPrintBusy(false);
                   }
@@ -785,7 +799,44 @@ export default function App() {
               >
                 {lowStockPrintBusy ? t('printerModal.testing', 'Printing...') : t('print', 'Print')}
               </button>
+              <button
+                type="button"
+                className="rounded-lg bg-red-600 px-4 py-2 text-white hover:bg-red-700 active:bg-red-700"
+                onClick={() => {
+                  if (lowStockPrintBusy) return;
+                  setLowStockWarning(null);
+                  setLowStockPrintFailToast('');
+                }}
+              >
+                {t('ok', 'OK')}
+              </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {lowStockPrintSuccessOpen ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50">
+          <div className="w-[min(90vw,420px)] rounded-xl border border-green-500/50 bg-green-50 p-5 text-green-950 shadow-2xl dark:bg-green-950/30 dark:text-green-100">
+            <h3 className="text-lg font-semibold text-green-700 dark:text-green-300">{t('print', 'Print')} {t('success', 'Success')}</h3>
+            <p className="mt-2 text-sm text-green-800 dark:text-green-200">
+              {t('printerModal.testSuccess', 'Test print succeeded.')}
+            </p>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                className="rounded-lg bg-green-600 px-4 py-2 text-white hover:bg-green-700 active:bg-green-700"
+                onClick={() => setLowStockPrintSuccessOpen(false)}
+              >
+                {t('ok', 'OK')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {lowStockPrintFailToast ? (
+        <div className="fixed right-4 top-4 z-[120]">
+          <div className="max-w-[420px] rounded-lg border border-red-500/60 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-xl dark:bg-red-950/40 dark:text-red-200">
+            {lowStockPrintFailToast}
           </div>
         </div>
       ) : null}

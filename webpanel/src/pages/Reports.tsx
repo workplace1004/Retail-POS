@@ -1786,7 +1786,17 @@ const Reports = () => {
     [],
   );
 
+  const isSmallestStockSort = stockSortBy === "smallest-stock";
+
+  useEffect(() => {
+    if (!isSmallestStockSort) return;
+    if (stockDisplay !== "all" && stockDisplay !== "stock-level") {
+      setStockDisplay("all");
+    }
+  }, [isSmallestStockSort, stockDisplay]);
+
   const stockListSubtitleKey = useMemo(() => {
+    if (stockDisplay === "stock-level") return "stockReportListStockLevel" as const;
     if (stockDisplay === "active") return "stockReportListActive" as const;
     if (stockDisplay === "screen") return "stockReportListScreen" as const;
     if (stockDisplay === "supplier") return "stockReportListSupplier" as const;
@@ -2884,6 +2894,7 @@ const Reports = () => {
                   <SelectContent>
                     <SelectItem value="product">{t("sortByProduct")}</SelectItem>
                     <SelectItem value="category">{t("sortByCategory")}</SelectItem>
+                    <SelectItem value="smallest-stock">{t("sortBySmallestStock")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -2896,9 +2907,15 @@ const Reports = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">{t("allProducts")}</SelectItem>
-                    <SelectItem value="active">{t("activeOnly")}</SelectItem>
-                    <SelectItem value="screen">{t("inUseOnScreen")}</SelectItem>
-                    <SelectItem value="supplier">{t("supplierLabel")}</SelectItem>
+                    {isSmallestStockSort ? (
+                      <SelectItem value="stock-level">{t("stockLevelProducts")}</SelectItem>
+                    ) : (
+                      <>
+                        <SelectItem value="active">{t("activeOnly")}</SelectItem>
+                        <SelectItem value="screen">{t("inUseOnScreen")}</SelectItem>
+                        <SelectItem value="supplier">{t("supplierLabel")}</SelectItem>
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
