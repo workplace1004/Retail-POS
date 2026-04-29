@@ -140,6 +140,9 @@ export default function App() {
   const scaleWeightResolveRef = useRef(null);
   const [scaleWeightProduct, setScaleWeightProduct] = useState(null);
   const [showInWaitingButton, setShowInWaitingButton] = useState(false);
+  const [lowStockWarning, setLowStockWarning] = useState(null);
+  const [lowStockPrintBusy, setLowStockPrintBusy] = useState(false);
+  const [lowStockPrintError, setLowStockPrintError] = useState('');
   const UA_TIMEZONE = 'Europe/Kyiv';
   const [time, setTime] = useState(() => new Date().toLocaleTimeString('en-GB', { timeZone: UA_TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false }));
   const {
@@ -457,22 +460,67 @@ export default function App() {
 
   const handleAddProductWithSelectedTable = useCallback(
     async (product) => {
+      const toNumberOrNull = (value) => {
+        const parsed = Number(String(value ?? '').trim().replace(',', '.'));
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+      const shouldWarnLowStock = (candidate) => {
+        const stockNotificationEnabled =
+          candidate?.stockNotification !== false &&
+          String(candidate?.stockNotification ?? '').toLowerCase() !== 'false';
+        const threshold = toNumberOrNull(candidate?.notificationSoldOutPieces);
+        const stock = toNumberOrNull(candidate?.stock);
+        if (!stockNotificationEnabled || threshold == null || stock == null) return false;
+        return stock <= threshold;
+      };
+
+      let resolvedProduct = product;
+      if (product?.id) {
+        try {
+          const res = await fetch(`${API}/products/${encodeURIComponent(String(product.id))}`, {
+            headers: { ...posTerminalAuthHeaders() },
+            cache: 'no-store',
+          });
+          if (res.ok) {
+            const fresh = await res.json().catch(() => null);
+            if (fresh && typeof fresh === 'object') {
+              resolvedProduct = { ...product, ...fresh };
+            }
+          }
+        } catch {
+          // Keep the local product fallback when refresh fails.
+        }
+      }
+
+      if (shouldWarnLowStock(resolvedProduct)) {
+        const threshold = toNumberOrNull(resolvedProduct?.notificationSoldOutPieces);
+        const stock = toNumberOrNull(resolvedProduct?.stock);
+        setLowStockWarning({
+          id: String(resolvedProduct?.id ?? ''),
+          number: Number(resolvedProduct?.number) || 0,
+          name: String(resolvedProduct?.name ?? ''),
+          stock: stock ?? 0,
+          threshold: threshold ?? 0,
+        });
+        setLowStockPrintError('');
+      }
+
       const qty = Math.max(1, parseInt(quantityInput, 10) || 1);
       setQuantityInput('');
 
-      if (product?.weegschaal) {
+      if (resolvedProduct?.weegschaal) {
         const result = await new Promise((resolve) => {
           scaleWeightResolveRef.current = resolve;
-          setScaleWeightProduct(product);
+          setScaleWeightProduct(resolvedProduct);
         });
         if (!result) return false;
-        return await addItemToOrder(product, 1, {
+        return await addItemToOrder(resolvedProduct, 1, {
           linePrice: result.linePrice,
           lineNotes: result.notes
         });
       }
 
-      return addItemToOrder(product, qty);
+      return addItemToOrder(resolvedProduct, qty);
     },
     [addItemToOrder, quantityInput]
   );
@@ -683,6 +731,64 @@ export default function App() {
         }}
         onCancelOrder={removeOrder}
       />
+      {lowStockWarning ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
+          <div className="w-[min(90vw,460px)] rounded-xl border border-red-500/60 bg-red-50 p-5 text-red-950 shadow-2xl dark:bg-red-950/30 dark:text-red-100">
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-red-700 dark:text-red-300">
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 3L22 20H2L12 3Z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                <path d="M12 9V14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                <circle cx="12" cy="17" r="1.2" fill="currentColor" />
+              </svg>
+              <span>{t('warning', 'Warning')}</span>
+            </h3>
+            <p className="mt-3 text-sm text-red-800 dark:text-red-200">
+              {`${lowStockWarning.name} is out of stock.`}
+            </p>
+            {lowStockPrintError ? (
+              <p className="mt-2 text-xs text-red-700 dark:text-red-300">{lowStockPrintError}</p>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={lowStockPrintBusy}
+                className="rounded-lg border border-red-600 bg-white px-4 py-2 text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-transparent dark:text-red-200 dark:hover:bg-red-900/40"
+                onClick={async () => {
+                  if (!lowStockWarning || lowStockPrintBusy) return;
+                  setLowStockPrintBusy(true);
+                  setLowStockPrintError('');
+                  try {
+                    const lines = [
+                      '*** LOW STOCK WARNING ***',
+                      `Product: ${lowStockWarning.name}`,
+                      lowStockWarning.number > 0 ? `PLU: ${lowStockWarning.number}` : '',
+                      lowStockWarning.id ? `Id: ${lowStockWarning.id}` : '',
+                      `Stock: ${lowStockWarning.stock}`,
+                      `Notification level: ${lowStockWarning.threshold}`,
+                      '',
+                    ].filter(Boolean);
+                    const res = await fetch(`${API}/printers/text-report`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', ...posTerminalAuthHeaders() },
+                      body: JSON.stringify({ lines }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data?.success !== true || data?.data?.printed !== true) {
+                      throw new Error(data?.error || t('control.reports.printFailed', 'Could not print on the main printer.'));
+                    }
+                  } catch (error) {
+                    setLowStockPrintError(error?.message || t('control.reports.printFailed', 'Could not print on the main printer.'));
+                  } finally {
+                    setLowStockPrintBusy(false);
+                  }
+                }}
+              >
+                {lowStockPrintBusy ? t('printerModal.testing', 'Printing...') : t('print', 'Print')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <InPlanningModal
         open={showInPlanningModal}
         onClose={() => setShowInPlanningModal(false)}

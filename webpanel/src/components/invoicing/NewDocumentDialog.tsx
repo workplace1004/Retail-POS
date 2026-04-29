@@ -6,7 +6,7 @@ import {
   Bold, Italic, Underline, Strikethrough, Subscript, Superscript,
   Type, Highlighter, Smile, Brush, Wand2, Pilcrow, AlignLeft, ListOrdered,
   List, Indent, Outdent, Quote, Minus, Link as LinkIcon, Image as ImageIcon,
-  Video, FileText, Table as TableIcon, Undo2, Redo2, Eraser, MousePointer, Code2, X, Loader2,
+  Video, FileText, Table as TableIcon, Undo2, Redo2, Eraser, MousePointer, Code2, X, Loader2, AlertTriangle,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -68,6 +68,8 @@ type CatalogProduct = {
   number: number;
   price: number;
   stock: string | number | null;
+  stockNotification?: boolean | string | null;
+  notificationSoldOutPieces?: string | number | null;
   vatTakeOut?: string | null;
 };
 
@@ -277,6 +279,7 @@ export function NewDocumentDialog({ open, onOpenChange, documentIdToEdit = null 
   const [productsSearch, setProductsSearch] = useState("");
   const [productsVatFilter, setProductsVatFilter] = useState("original");
   const [products, setProducts] = useState<CatalogProduct[]>([]);
+  const [lowStockWarning, setLowStockWarning] = useState<{ name: string; stock: number; threshold: number } | null>(null);
 
   const totals = useMemo(() => {
     const totalInclSum = items.reduce((s, it) => s + it.totalIncl, 0);
@@ -439,6 +442,8 @@ export function NewDocumentDialog({ open, onOpenChange, documentIdToEdit = null 
           number: Number(row.number) || 0,
           price: Number(row.price) || 0,
           stock: (row.stock as string | number | null | undefined) ?? null,
+          stockNotification: (row.stockNotification as boolean | string | null | undefined) ?? null,
+          notificationSoldOutPieces: (row.notificationSoldOutPieces as string | number | null | undefined) ?? null,
           vatTakeOut: row.vatTakeOut == null ? null : String(row.vatTakeOut),
         })).filter((p) => p.id && p.name);
         setProducts(mapped);
@@ -945,6 +950,14 @@ export function NewDocumentDialog({ open, onOpenChange, documentIdToEdit = null 
   };
 
   const applyProductToLine = (product: CatalogProduct) => {
+    const stockNotificationEnabled = product.stockNotification !== false && String(product.stockNotification ?? "").toLowerCase() !== "false";
+    const thresholdRaw = String(product.notificationSoldOutPieces ?? "").trim();
+    const thresholdNum = Number(thresholdRaw.replace(",", "."));
+    const threshold = Number.isFinite(thresholdNum) ? thresholdNum : null;
+    const stock = parseStockQty(product.stock);
+    if (stockNotificationEnabled && threshold != null && stock <= threshold) {
+      setLowStockWarning({ name: product.name, stock, threshold });
+    }
     const originalVat = parseVatRate(product.vatTakeOut);
     const nextVat = productsVatFilter === "original"
       ? (originalVat ?? 21)
@@ -1738,6 +1751,29 @@ export function NewDocumentDialog({ open, onOpenChange, documentIdToEdit = null 
                 )}
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={lowStockWarning != null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setLowStockWarning(null);
+        }}
+      >
+        <DialogContent className="max-w-md border-destructive/50 bg-red-50 text-red-950 dark:bg-red-950/30 dark:text-red-100">
+          <DialogTitle className="flex items-center gap-2 text-red-700 dark:text-red-300">
+            <AlertTriangle className="h-5 w-5" />
+            <span>Warning</span>
+          </DialogTitle>
+          {lowStockWarning ? (
+            <DialogDescription className="text-red-800 dark:text-red-200">
+              {`${lowStockWarning.name} is out of stock.`}
+            </DialogDescription>
+          ) : null}
+          <div className="flex justify-end pt-2">
+            <Button type="button" className="bg-red-600 text-white hover:bg-red-700" onClick={() => setLowStockWarning(null)}>
+              OK
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
