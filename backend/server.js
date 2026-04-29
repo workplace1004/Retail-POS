@@ -15,6 +15,7 @@ import { createCashmaticService } from './services/cashmaticService.js';
 import { createPayworldService } from './services/payworldService.js';
 import { createCcvService } from './services/ccvService.js';
 import { createVivaService } from './services/vivaService.js';
+import { createWorldlineService } from './services/worldlineService.js';
 import { buildPeriodicReportReceiptLines } from './periodicReportReceipt.js';
 import { buildPeriodicReportWebSections } from './periodicReportWebSections.js';
 import { buildFinancialReportReceiptLines } from './financialReportReceipt.js';
@@ -4059,7 +4060,7 @@ app.get('/api/settings/credit-card', async (req, res) => {
 app.put('/api/settings/credit-card', async (req, res) => {
   try {
     const type = req.body?.type != null ? String(req.body.type) : 'disabled';
-    const allowed = ['disabled', 'payworld', 'ccv', 'viva', 'viva-wallet'];
+    const allowed = ['disabled', 'payworld', 'ccv', 'viva', 'viva-wallet', 'worldline'];
     const safeType = allowed.includes(type) ? type : 'disabled';
     const value = JSON.stringify({ type: safeType });
     await prisma.appSetting.upsert({
@@ -6433,6 +6434,11 @@ app.post('/api/payment-terminals/:id/test', async (req, res) => {
       else res.status(500).json({ success: false, error: result.message });
     } else if (t.type === 'viva' || t.type === 'viva-wallet') {
       const service = createVivaService({ connection_string: t.connectionString });
+      const result = await service.testConnection();
+      if (result.success) res.json({ success: true, message: result.message });
+      else res.status(500).json({ success: false, error: result.message });
+    } else if (t.type === 'worldline') {
+      const service = createWorldlineService({ connection_string: t.connectionString });
       const result = await service.testConnection();
       if (result.success) res.json({ success: true, message: result.message });
       else res.status(500).json({ success: false, error: result.message });
@@ -9188,6 +9194,98 @@ app.post('/api/viva/config', async (req, res) => {
   } catch (err) {
     console.error('POST /api/viva/config', err);
     return res.status(500).json({ ok: false, error: err.message || 'Failed to save Viva config' });
+  }
+});
+
+// ---------- Worldline payment (CTEP / IP — session-based) ----------
+app.post('/api/worldline/start', async (req, res) => {
+  try {
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ ok: false, error: 'Invalid amount for Worldline' });
+    }
+
+    const terminal = await prisma.paymentTerminal.findFirst({
+      where: { type: { in: ['worldline'] }, enabled: 1 },
+      orderBy: { isMain: 'desc' },
+    });
+    if (!terminal) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Worldline terminal not configured or not enabled.',
+      });
+    }
+
+    serverLog('worldline', 'Start payment requested', {
+      amount,
+      terminalId: terminal.id,
+      terminalName: terminal.name,
+      connection: summarizePayworldConnection(terminal.connectionString),
+    });
+
+    const service = createWorldlineService({ connection_string: terminal.connectionString });
+    const result = service.createSession(amount);
+    if (!result?.success) {
+      return res.status(500).json({ ok: false, error: result?.message || 'Failed to start Worldline payment.' });
+    }
+
+    return res.json({
+      ok: true,
+      provider: 'worldline',
+      sessionId: result.sessionId,
+      state: result?.data?.state || 'IN_PROGRESS',
+      message: result?.data?.message || 'Starting payment...',
+      amountInCents: result?.data?.amountInCents,
+    });
+  } catch (err) {
+    console.error('POST /api/worldline/start', err);
+    return res.status(500).json({ ok: false, error: err.message || 'Failed to start Worldline payment' });
+  }
+});
+
+app.get('/api/worldline/status/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) return res.status(400).json({ ok: false, error: 'No sessionId provided.' });
+
+    const terminal = await prisma.paymentTerminal.findFirst({
+      where: { type: { in: ['worldline'] }, enabled: 1 },
+      orderBy: { isMain: 'desc' },
+    });
+    if (!terminal) {
+      return res.status(503).json({ ok: false, error: 'Worldline terminal not configured or not enabled.' });
+    }
+
+    const service = createWorldlineService({ connection_string: terminal.connectionString });
+    const status = service.getSessionStatus(sessionId);
+    if (!status?.success) return res.status(404).json({ ok: false, error: status?.message || 'Session not found' });
+    return res.json(status);
+  } catch (err) {
+    console.error('GET /api/worldline/status/:sessionId', err);
+    return res.status(500).json({ ok: false, error: err.message || 'Failed to get Worldline status' });
+  }
+});
+
+app.post('/api/worldline/cancel/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) return res.status(400).json({ ok: false, error: 'No sessionId provided.' });
+
+    const terminal = await prisma.paymentTerminal.findFirst({
+      where: { type: { in: ['worldline'] }, enabled: 1 },
+      orderBy: { isMain: 'desc' },
+    });
+    if (!terminal) {
+      return res.status(503).json({ ok: false, error: 'Worldline terminal not configured or not enabled.' });
+    }
+
+    const service = createWorldlineService({ connection_string: terminal.connectionString });
+    const result = await service.cancelSession(sessionId);
+    if (!result?.success) return res.status(400).json({ ok: false, error: result?.message || 'Cancel failed' });
+    return res.json({ ok: true, message: result.message || 'Payment cancelled.' });
+  } catch (err) {
+    console.error('POST /api/worldline/cancel/:sessionId', err);
+    return res.status(500).json({ ok: false, error: err.message || 'Failed to cancel Worldline payment' });
   }
 });
 

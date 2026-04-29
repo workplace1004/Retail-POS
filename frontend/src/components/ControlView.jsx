@@ -144,6 +144,7 @@ const CREDIT_CARD_TYPE_OPTIONS = [
   { value: 'disabled', labelKey: 'control.external.disabled', fallback: 'Disabled' },
   { value: 'payworld', labelKey: 'control.external.creditCardType.payworld', fallback: 'Payworld' },
   { value: 'ccv', labelKey: 'control.external.creditCardType.ccv', fallback: 'CCV' },
+  { value: 'worldline', labelKey: 'control.external.creditCardType.worldline', fallback: 'Worldline' },
   { value: 'viva-wallet', labelKey: 'control.external.creditCardType.vivaWallet', fallback: 'Viva wallet' }
 ];
 
@@ -906,6 +907,14 @@ export function ControlView({
   const [ccvActiveField, setCcvActiveField] = useState('name');
   const [savingCcv, setSavingCcv] = useState(false);
   const [ccvTerminalId, setCcvTerminalId] = useState(null);
+
+  const [worldlineName, setWorldlineName] = useState('Worldline RX5000');
+  const [worldlineIpAddress, setWorldlineIpAddress] = useState('');
+  const [worldlinePort, setWorldlinePort] = useState('9001');
+  const [worldlineSimulate, setWorldlineSimulate] = useState(true);
+  const [worldlineActiveField, setWorldlineActiveField] = useState('name');
+  const [savingWorldline, setSavingWorldline] = useState(false);
+  const [worldlineTerminalId, setWorldlineTerminalId] = useState(null);
 
   useEffect(() => {
     if (topNavId === 'external-devices' && (subNavId === 'Payworld' || subNavId === 'CCV')) {
@@ -4825,11 +4834,49 @@ export function ControlView({
 
   useEffect(() => {
     if (topNavId !== 'external-devices' || subNavId !== 'Card') return;
+    let cancelled = false;
+    try {
+      const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_worldline');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.name != null) setWorldlineName(String(s.name));
+        if (s.ip != null) setWorldlineIpAddress(String(s.ip));
+        if (s.port != null) setWorldlinePort(String(s.port));
+        if (s.simulate != null) setWorldlineSimulate(!!s.simulate);
+      }
+    } catch (_) { }
+    const loadWorldlineFromDb = async () => {
+      try {
+        const res = await fetch(`${API}/payment-terminals`);
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return;
+        const terminals = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+        const wl = terminals.find((t) => String(t?.type || '').toLowerCase() === 'worldline');
+        if (!wl || cancelled) return;
+        let parsed = {};
+        try {
+          parsed = typeof wl.connection_string === 'string' ? JSON.parse(wl.connection_string) : (wl.connection_string || {});
+        } catch (_) { }
+        setWorldlineTerminalId(wl.id || null);
+        if (wl.name != null) setWorldlineName(String(wl.name));
+        if (parsed.ip != null) setWorldlineIpAddress(String(parsed.ip));
+        if (parsed.port != null) setWorldlinePort(String(parsed.port));
+        if (parsed.simulate != null) setWorldlineSimulate(!!parsed.simulate);
+      } catch {
+        // Keep local values if backend is unavailable.
+      }
+    };
+    loadWorldlineFromDb();
+    return () => { cancelled = true; };
+  }, [topNavId, subNavId]);
+
+  useEffect(() => {
+    if (topNavId !== 'external-devices' || subNavId !== 'Card') return;
     try {
       const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_card_terminal_provider');
       if (!raw) return;
       const provider = String(raw).trim().toLowerCase();
-      if (provider === 'payworld' || provider === 'ccv' || provider === 'viva') {
+      if (provider === 'payworld' || provider === 'ccv' || provider === 'viva' || provider === 'worldline') {
         setCardTerminalProvider(provider);
       }
     } catch (_) {
@@ -5278,6 +5325,92 @@ export function ControlView({
     }
   };
 
+  const handleSaveWorldline = async () => {
+    setSavingWorldline(true);
+    try {
+      const trimmedIp = String(worldlineIpAddress || '').trim();
+      const trimmedPort = String(worldlinePort || '').trim();
+      const resolvedPort = trimmedPort || '9001';
+      const validPort = Number.parseInt(resolvedPort, 10);
+      if (!trimmedIp) {
+        throw new Error('Worldline IP address is required.');
+      }
+      if (/^[0-9]+$/.test(trimmedIp)) {
+        throw new Error('Worldline IP address is invalid. Please enter a full IP like 192.168.1.60.');
+      }
+      if (!Number.isInteger(validPort) || validPort < 1 || validPort > 65535) {
+        throw new Error('Worldline port must be a number between 1 and 65535.');
+      }
+
+      let merged = {};
+      try {
+        const listRes = await fetch(`${API}/payment-terminals`);
+        const listData = await listRes.json().catch(() => null);
+        const list = Array.isArray(listData?.data) ? listData.data : (Array.isArray(listData) ? listData : []);
+        const existingWl = list.find((t) => String(t?.type || '').toLowerCase() === 'worldline');
+        if (existingWl?.connection_string) {
+          try {
+            merged = typeof existingWl.connection_string === 'string'
+              ? JSON.parse(existingWl.connection_string)
+              : (existingWl.connection_string || {});
+          } catch (_) {
+            merged = {};
+          }
+        }
+      } catch (_) { }
+
+      const connectionConfig = {
+        ...merged,
+        ip: trimmedIp,
+        port: resolvedPort,
+        model: 'RX5000',
+        protocol: 'ctep',
+        simulate: !!worldlineSimulate,
+      };
+      const terminalPayload = {
+        name: String(worldlineName || '').trim() || 'Worldline Terminal',
+        type: 'worldline',
+        connection_type: 'tcp',
+        connection_string: JSON.stringify(connectionConfig),
+        enabled: 1,
+        is_main: 1,
+      };
+      let terminalId = worldlineTerminalId;
+      if (!terminalId) {
+        const listRes = await fetch(`${API}/payment-terminals`);
+        const listData = await listRes.json().catch(() => null);
+        const list = Array.isArray(listData?.data) ? listData.data : (Array.isArray(listData) ? listData : []);
+        const existing = list.find((t) => String(t?.type || '').toLowerCase() === 'worldline');
+        if (existing?.id) terminalId = existing.id;
+      }
+      const endpoint = terminalId ? `${API}/payment-terminals/${terminalId}` : `${API}/payment-terminals`;
+      const method = terminalId ? 'PUT' : 'POST';
+      const saveRes = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(terminalPayload),
+      });
+      const saved = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) {
+        throw new Error(saved?.error || `Failed to save Worldline terminal (HTTP ${saveRes.status})`);
+      }
+      if (saved?.id) setWorldlineTerminalId(saved.id);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('pos_worldline', JSON.stringify({
+          name: terminalPayload.name,
+          ip: connectionConfig.ip,
+          port: connectionConfig.port,
+          simulate: !!worldlineSimulate,
+        }));
+      }
+      showToast('success', 'Worldline settings saved.');
+    } catch (err) {
+      showToast('error', err?.message || 'Failed to save Worldline settings.');
+    } finally {
+      setSavingWorldline(false);
+    }
+  };
+
   const cashmaticKeyboardValue =
     cashmaticActiveField === 'name' ? cashmaticName
       : cashmaticActiveField === 'ip' ? cashmaticIpAddress
@@ -5318,6 +5451,18 @@ export function ControlView({
     if (vivaActiveField === 'name') setVivaName(v);
     else if (vivaActiveField === 'ip') setVivaIpAddress(v);
     else if (vivaActiveField === 'port') setVivaPort(v);
+  };
+
+  const worldlineKeyboardValue =
+    worldlineActiveField === 'name' ? worldlineName
+      : worldlineActiveField === 'ip' ? worldlineIpAddress
+        : worldlineActiveField === 'port' ? worldlinePort
+          : '';
+
+  const worldlineKeyboardOnChange = (v) => {
+    if (worldlineActiveField === 'name') setWorldlineName(v);
+    else if (worldlineActiveField === 'ip') setWorldlineIpAddress(v);
+    else if (worldlineActiveField === 'port') setWorldlinePort(v);
   };
 
   const ccvKeyboardValue =
@@ -6244,6 +6389,7 @@ export function ControlView({
           handleSavePayworld,
           handleSaveCcv,
           handleSaveViva,
+          handleSaveWorldline,
           handleSavePriceDisplay,
           handleSaveProductionTickets,
           handleSaveReportSettings,
@@ -6296,6 +6442,13 @@ export function ControlView({
           vivaPort,
           vivaKeyboardOnChange,
           vivaKeyboardValue,
+          worldlineName,
+          worldlineIpAddress,
+          worldlinePort,
+          worldlineSimulate,
+          setWorldlineSimulate,
+          worldlineKeyboardOnChange,
+          worldlineKeyboardValue,
           ccvName,
           ccvIpAddress,
           ccvCommandPort,
@@ -6352,6 +6505,7 @@ export function ControlView({
           savingPayworld,
           savingCcv,
           savingViva,
+          savingWorldline,
           savingPriceDisplay,
           savingProdTickets,
           savingReportSettings,
@@ -6420,6 +6574,10 @@ export function ControlView({
           setVivaName,
           setVivaIpAddress,
           setVivaPort,
+          setWorldlineActiveField,
+          setWorldlineName,
+          setWorldlineIpAddress,
+          setWorldlinePort,
           setCcvActiveField,
           setCcvName,
           setCcvIpAddress,

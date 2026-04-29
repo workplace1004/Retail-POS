@@ -18,7 +18,7 @@ const PAY_METHOD_ICON_PNG = {
   generic: '/card.png',
 };
 
-const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet'];
+const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline'];
 const TERMINAL_CARD_INTEGRATIONS = new Set([
   'card',
   'payworld',
@@ -421,6 +421,10 @@ export function PayDifferentlyModal({
         .reduce((sum, integration) => sum + sumAmountsByIntegration(activePaymentMethods, paymentAmounts, integration), 0);
       if (vivaTotal > 0) {
         await runCardTerminalPayment('viva', vivaTotal);
+      }
+      const worldlineTotal = sumAmountsByIntegration(activePaymentMethods, paymentAmounts, 'worldline');
+      if (worldlineTotal > 0) {
+        await runCardTerminalPayment('worldline', worldlineTotal);
       }
       await onProceedAfterTerminals(activePaymentMethods, paymentAmounts, payModalTargetTotal);
     } catch (err) {

@@ -890,6 +890,17 @@ export function NewDocumentDialog({ open, onOpenChange, documentIdToEdit = null 
         { method: editId ? "PATCH" : "POST", body: JSON.stringify(body) },
       );
       if (res?.document) {
+        if (!editId) {
+          // New-document flow uses temporary line-items storage; clear it after successful save.
+          try {
+            await apiRequest<void>("/api/webpanel/invoicing/line-items", { method: "DELETE" });
+          } catch {
+            // Keep save successful even if temp cleanup fails.
+          }
+          setItems([]);
+          setEditingItemId(null);
+          setEditingIsNewItem(false);
+        }
         setSavedDocument(res.document);
         setDocumentPhase("preview");
         toast({ description: editId ? t("invoicingDocumentUpdated") : t("invoicingDocumentSaved") });
@@ -1046,10 +1057,12 @@ export function NewDocumentDialog({ open, onOpenChange, documentIdToEdit = null 
           <InvoicingDocumentPreview
             document={savedDocument}
             layout={previewLayout}
-            docKindLabel={invoicingDocKindLabel(savedDocument.kind, t)}
             t={t}
             onClose={() => handleMainDialogOpenChange(false)}
-            onToolbarStub={() => toast({ description: t("invoicingToolbarNotYet") })}
+            onPrint={() => toast({ description: t("invoicingToolbarNotYet") })}
+            onDownloadPdf={() => toast({ description: t("invoicingToolbarNotYet") })}
+            onPayments={() => toast({ description: t("invoicingToolbarNotYet") })}
+            onSend={() => toast({ description: t("invoicingToolbarNotYet") })}
           />
         ) : (
           <>

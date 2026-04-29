@@ -144,6 +144,7 @@ export function ControlViewMainContentArea({ ctx }) {
     handleSavePayworld,
     handleSaveCcv,
     handleSaveViva,
+    handleSaveWorldline,
     handleSavePriceDisplay,
     handleSaveProductionTickets,
     handleSaveReportSettings,
@@ -197,6 +198,13 @@ export function ControlViewMainContentArea({ ctx }) {
     vivaPort,
     vivaKeyboardOnChange,
     vivaKeyboardValue,
+    worldlineName,
+    worldlineIpAddress,
+    worldlinePort,
+    worldlineSimulate,
+    setWorldlineSimulate,
+    worldlineKeyboardOnChange,
+    worldlineKeyboardValue,
     ccvName,
     ccvIpAddress,
     ccvCommandPort,
@@ -252,6 +260,7 @@ export function ControlViewMainContentArea({ ctx }) {
     savingPayworld,
     savingCcv,
     savingViva,
+    savingWorldline,
     savingPriceDisplay,
     savingProdTickets,
     savingReportSettings,
@@ -321,6 +330,10 @@ export function ControlViewMainContentArea({ ctx }) {
     setVivaName,
     setVivaIpAddress,
     setVivaPort,
+    setWorldlineActiveField,
+    setWorldlineName,
+    setWorldlineIpAddress,
+    setWorldlinePort,
     setCcvActiveField,
     setCcvName,
     setCcvIpAddress,
@@ -2695,6 +2708,17 @@ export function ControlViewMainContentArea({ ctx }) {
                     >
                       VIVA
                     </button>
+                    <button
+                      type="button"
+                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                        cardTerminalProvider === 'worldline'
+                          ? 'bg-pos-bg text-pos-text'
+                          : 'text-pos-muted active:text-pos-text'
+                      }`}
+                      onClick={() => setCardTerminalProvider('worldline')}
+                    >
+                      {tr('control.external.creditCardType.worldline', 'Worldline')}
+                    </button>
                   </div>
                 </div>
                 {cardTerminalProvider === 'ccv' ? (
@@ -2734,6 +2758,38 @@ export function ControlViewMainContentArea({ ctx }) {
                       handleSavePayworld={handleSaveViva}
                       payworldKeyboardValue={vivaKeyboardValue}
                       payworldKeyboardOnChange={vivaKeyboardOnChange}
+                    />
+                  </div>
+                ) : cardTerminalProvider === 'worldline' ? (
+                  <div className="w-full">
+                    <div className="text-center text-sm font-semibold text-pos-muted mb-2">
+                      {tr('control.external.worldlineSettingsTitle', 'Worldline RX5000 (CTEP over IP)')}
+                    </div>
+                    <ControlViewPayworld
+                      tr={tr}
+                      labelKeyPrefix="control.worldline"
+                      extraBottom={(
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5 rounded border-pos-border"
+                            checked={!!worldlineSimulate}
+                            onChange={(e) => setWorldlineSimulate(e.target.checked)}
+                          />
+                          <span>{tr('control.worldline.simulate', 'Test mode (simulate payment, no CTEP on wire)')}</span>
+                        </label>
+                      )}
+                      payworldName={worldlineName}
+                      setPayworldName={setWorldlineName}
+                      setPayworldActiveField={setWorldlineActiveField}
+                      payworldIpAddress={worldlineIpAddress}
+                      setPayworldIpAddress={setWorldlineIpAddress}
+                      payworldPort={worldlinePort}
+                      setPayworldPort={setWorldlinePort}
+                      savingPayworld={savingWorldline}
+                      handleSavePayworld={handleSaveWorldline}
+                      payworldKeyboardValue={worldlineKeyboardValue}
+                      payworldKeyboardOnChange={worldlineKeyboardOnChange}
                     />
                   </div>
                 ) : (

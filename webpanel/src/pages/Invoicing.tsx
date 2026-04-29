@@ -34,7 +34,31 @@ type InvoicingDocumentListRow = {
   dueAmount: number;
   alreadyPaid: number;
   customerName: string;
+  sent?: boolean;
 };
+
+const INVOICING_SENT_STORAGE_KEY = "invoicing_sent_document_ids_v1";
+
+function readSentDocumentIds(): Set<string> {
+  if (typeof localStorage === "undefined") return new Set<string>();
+  try {
+    const raw = localStorage.getItem(INVOICING_SENT_STORAGE_KEY);
+    const arr = JSON.parse(String(raw || "[]"));
+    if (!Array.isArray(arr)) return new Set<string>();
+    return new Set(arr.map((v) => String(v || "").trim()).filter(Boolean));
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function writeSentDocumentId(id: string): void {
+  if (typeof localStorage === "undefined") return;
+  const sid = String(id || "").trim();
+  if (!sid) return;
+  const next = readSentDocumentIds();
+  next.add(sid);
+  localStorage.setItem(INVOICING_SENT_STORAGE_KEY, JSON.stringify([...next]));
+}
 
 function parseMoneyInput(raw: string): number {
   const normalized = String(raw ?? "").trim().replace(/\s/g, "").replace(",", ".");
@@ -221,7 +245,8 @@ const Invoicing = () => {
         `/api/webpanel/invoicing/documents?${qs.toString()}`
       );
       const rows = Array.isArray(res?.documents) ? res.documents : [];
-      setDocuments(rows);
+      const sentIds = readSentDocumentIds();
+      setDocuments(rows.map((r) => ({ ...r, sent: Boolean(r.sent) || sentIds.has(String(r.id)) })));
     } catch {
       setDocuments([]);
       setDocsFetchError("err");
@@ -358,7 +383,10 @@ const Invoicing = () => {
         },
       );
       console.log("[invoicing/send] API success", { documentId: docId, response: res });
+      writeSentDocumentId(docPreview.id);
+      setDocuments((prev) => prev.map((row) => (row.id === docPreview.id ? { ...row, sent: true } : row)));
       toast({ description: "Invoice email sent." });
+      closeDocPreview();
     } catch (e) {
       console.error("[invoicing/send] failed", { documentId: docId, error: e });
       toast({
@@ -369,7 +397,7 @@ const Invoicing = () => {
       setSendInvoiceLoading(false);
       console.log("[invoicing/send] finished", { documentId: docId });
     }
-  }, [docPreview]);
+  }, [docPreview, closeDocPreview]);
 
   const openDocumentPreview = useCallback(
     async (docId: string) => {
@@ -640,7 +668,9 @@ const Invoicing = () => {
                           {r.customerName}
                         </div>
                         <div className="text-right font-mono">{totalStr}</div>
-                        <div className="flex justify-center text-muted-foreground" />
+                        <div className="flex justify-center">
+                          {r.sent ? <Check className="h-4 w-4 text-primary" aria-label={t("sent")} /> : null}
+                        </div>
                         <div className="flex justify-center">
                           {settled ? (
                             <Check className="h-4 w-4 text-primary" aria-label={t("paid")} />
