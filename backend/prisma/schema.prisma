@@ -389,6 +389,33 @@ model Invoicing {
   updatedAt    DateTime @updatedAt
 }
 
+/// Saved sales document from webpanel Invoicing "New document" Save.
+model InvoicingDocument {
+  id              String   @id @default(cuid())
+  displayNumber   Int
+  kind            String
+  layout          String
+  docLang         String   @default("nl")
+  paymentTerm     String   @default("")
+  paymentMethod   String   @default("")
+  documentDate    DateTime
+  alreadyPaid     Float    @default(0)
+  notes           String   @default("")
+  attachmentPos   String   @default("above")
+  attachmentText  String   @default("")
+  customerId      String?
+  customerJson    String   @default("{}")
+  itemsJson       String   @default("[]")
+  subtotalExcl    Float    @default(0)
+  vatTotal        Float    @default(0)
+  totalIncl       Float    @default(0)
+  dueAmount       Float    @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("invoicing_document")
+}
+
 /// Saved document layouts for Invoicing settings page.
 model InvoicingLayout {
   id        String   @id @default(cuid())

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { format, parseISO } from "date-fns";
 import {
   Save, Calendar as CalendarIcon, User, PlusCircle, Download,
   RotateCcw, FileDown, BookOpen, Plus, ArrowDown, ArrowUp, Pencil, Trash2, ArrowLeftRight,
@@ -24,10 +24,18 @@ import { DeleteConfirmDialog } from "@/components/DeleteConfirmDialog";
 import { toast } from "@/hooks/use-toast";
 import { ExistingCustomersDialog, type ExistingCustomer } from "./ExistingCustomersDialog";
 import { AdvanceLoadDialog } from "./AdvanceLoadDialog";
+import {
+  InvoicingDocumentPreview,
+  type InvoicingPreviewLayout,
+  type SavedInvoicingDocumentDTO,
+} from "./InvoicingDocumentPreview";
+import type { TranslationKey } from "@/lib/translations";
 
 interface NewDocumentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** When set, loads this saved invoicing document for edit (list → pencil). */
+  documentIdToEdit?: string | null;
 }
 
 interface LineItem {
@@ -41,6 +49,17 @@ interface LineItem {
   vat: number;
   createdAt?: string;
   updatedAt?: string;
+}
+
+function invoicingDocKindLabel(kind: string, t: (k: TranslationKey) => string) {
+  const map: Record<string, TranslationKey> = {
+    invoice: "docKindInvoice",
+    "invoice-tickets": "docKindInvoiceFromTickets",
+    quotation: "docKindQuotation",
+    credit: "docKindCreditNote",
+    delivery: "docKindDeliveryNote",
+  };
+  return t(map[kind] ?? "docKindInvoice");
 }
 
 type CatalogProduct = {
@@ -111,6 +130,57 @@ function toNullableTrim(s: string): string | null {
   return x === "" ? null : x;
 }
 
+function layoutSelectLabel(name: string, t: (k: TranslationKey) => string) {
+  return name.trim().toLowerCase() === "standard" ? t("docLayoutStandard") : name;
+}
+
+function pickLayoutValueForList(current: string, names: string[]): string {
+  if (names.includes(current)) return current;
+  const caseInsensitive = names.find((n) => n.toLowerCase() === current.toLowerCase());
+  if (caseInsensitive) return caseInsensitive;
+  const standard = names.find((n) => n.trim().toLowerCase() === "standard");
+  if (standard) return standard;
+  return names[0] ?? "standard";
+}
+
+function documentLineItemsToLocal(doc: SavedInvoicingDocumentDTO): LineItem[] {
+  let nid = 1;
+  return (Array.isArray(doc.items) ? doc.items : []).map((it) => ({
+    id: nid++,
+    qty: Number(it.qty) || 0,
+    description: String(it.description ?? ""),
+    totalIncl: Number(it.totalIncl) || 0,
+    perPieceIncl: Number(it.perPieceIncl) || 0,
+    perPieceExcl: Number(it.perPieceExcl) || 0,
+    discount: Number(it.discount) || 0,
+    vat: Number(it.vat) || 0,
+  }));
+}
+
+function customerSnapshotFromDocument(doc: SavedInvoicingDocumentDTO): ExistingCustomer | null {
+  const raw = doc.customer;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const c = raw as Record<string, unknown>;
+  const id = doc.customerId?.trim();
+  const name = String(c.name ?? "").trim() || "-";
+  const subName = c.subName != null ? String(c.subName).trim() : "";
+  const street = String(c.street ?? "").trim() || "-";
+  const postalCity = String(c.postalCity ?? "").trim() || "-";
+  const country = c.country != null ? String(c.country).trim() : "";
+  const vatNumber = String(c.vatNumber ?? "").trim() || "-";
+  const email = c.email != null ? String(c.email).trim() : "";
+  return {
+    id: id || undefined,
+    name,
+    subName: subName || undefined,
+    street,
+    postalCity,
+    country: country || undefined,
+    vatNumber,
+    email: email || undefined,
+  };
+}
+
 function buildCustomerPayload(form: CustomerFormState): Record<string, string | null> {
   const nameResolved =
     form.name.trim()
@@ -138,14 +208,16 @@ function buildCustomerPayload(form: CustomerFormState): Record<string, string | 
   };
 }
 
-export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps) {
+export function NewDocumentDialog({ open, onOpenChange, documentIdToEdit = null }: NewDocumentDialogProps) {
   const { t, lang } = useLanguage();
+  const editingSavedDocument = useMemo(() => Boolean(documentIdToEdit?.trim()), [documentIdToEdit]);
   const sortedCountryCodes = useMemo(() => getSortedCountryCodes(lang), [lang]);
 
   const [tab, setTab] = useState<"format" | "attachment">("format");
   const [date, setDate] = useState<Date>(new Date());
   const [kind, setKind] = useState("invoice");
   const [layout, setLayout] = useState("standard");
+  const [layoutOptions, setLayoutOptions] = useState<string[]>(["standard"]);
   const [docLang, setDocLang] = useState("nl");
   const [payTerm, setPayTerm] = useState("immediately");
   const [payMethod, setPayMethod] = useState("transfer");
@@ -181,6 +253,10 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [resetListConfirmOpen, setResetListConfirmOpen] = useState(false);
   const [items, setItems] = useState<LineItem[]>([]);
+  const [documentPhase, setDocumentPhase] = useState<"form" | "preview">("form");
+  const [savedDocument, setSavedDocument] = useState<SavedInvoicingDocumentDTO | null>(null);
+  const [previewLayout, setPreviewLayout] = useState<InvoicingPreviewLayout | null>(null);
+  const [savingDocument, setSavingDocument] = useState(false);
 
   // attachment editor
   const [attachmentPos, setAttachmentPos] = useState("above");
@@ -216,6 +292,18 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     };
   }, [items, alreadyPaid]);
 
+  const handleMainDialogOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setDocumentPhase("form");
+        setSavedDocument(null);
+        setPreviewLayout(null);
+      }
+      onOpenChange(next);
+    },
+    [onOpenChange],
+  );
+
   const parseVatRate = (value: string | null | undefined) => {
     const raw = String(value ?? "").trim();
     if (!raw) return null;
@@ -234,24 +322,107 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    const loadItems = async () => {
+    const bootstrap = async () => {
       setLoadItemsError("");
+      setDocumentPhase("form");
+      setSavedDocument(null);
+      setPreviewLayout(null);
+
+      let names: string[] = ["standard"];
       try {
-        const response = await apiRequest<{ items: LineItem[] }>("/api/webpanel/invoicing/line-items");
-        if (!cancelled) {
-          setItems(Array.isArray(response?.items) ? response.items : []);
-        }
+        const lr = await apiRequest<{ value: string[] }>("/api/settings/invoicing-layouts");
+        const raw = Array.isArray(lr?.value) ? lr.value : [];
+        const parsed = raw.map((s) => String(s ?? "").trim()).filter(Boolean);
+        names = parsed.length > 0 ? parsed : ["standard"];
       } catch {
-        if (!cancelled) {
-          setLoadItemsError("Failed to load invoicing items from database.");
+        names = ["standard"];
+      }
+      if (cancelled) return;
+      setLayoutOptions(names);
+
+      const editId = documentIdToEdit?.trim() || "";
+      if (editId) {
+        try {
+          const res = await apiRequest<{ document: SavedInvoicingDocumentDTO }>(
+            `/api/webpanel/invoicing/documents/${encodeURIComponent(editId)}`
+          );
+          if (cancelled || !res?.document) return;
+          const d = res.document;
+          setTab("format");
+          setKind(String(d.kind || "invoice"));
+          setLayout(pickLayoutValueForList(String(d.layout || "standard"), names));
+          setDocLang(String(d.docLang || "nl"));
+          setPayTerm(String(d.paymentTerm || "immediately"));
+          setPayMethod(String(d.paymentMethod || "transfer"));
+          try {
+            const dd = parseISO(d.documentDate);
+            if (Number.isFinite(dd.getTime())) setDate(dd);
+          } catch {
+            /* ignore */
+          }
+          setAlreadyPaid((Number(d.alreadyPaid) || 0).toFixed(2));
+          setNotes(String(d.notes ?? ""));
+          setAttachmentPos(String(d.attachmentPos || "above"));
+          setAttachmentText(String(d.attachmentText ?? ""));
+          setItems(documentLineItemsToLocal(d));
+          setSelectedCustomer(customerSnapshotFromDocument(d));
+          setEditingItemId(null);
+          setEditingIsNewItem(false);
+        } catch {
+          if (!cancelled) {
+            setLoadItemsError(t("invoicingDocumentLoadFailed"));
+            setItems([]);
+            setSelectedCustomer(null);
+          }
+        }
+      } else {
+        setLayout((prev) => pickLayoutValueForList(prev, names));
+        try {
+          const response = await apiRequest<{ items: LineItem[] }>("/api/webpanel/invoicing/line-items");
+          if (!cancelled) {
+            setItems(Array.isArray(response?.items) ? response.items : []);
+          }
+        } catch {
+          if (!cancelled) {
+            setLoadItemsError(t("invoicingLineItemsLoadFailed"));
+          }
         }
       }
     };
-    void loadItems();
+    void bootstrap();
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, documentIdToEdit, t]);
+
+  useEffect(() => {
+    if (documentPhase !== "preview" || !savedDocument) return;
+    let cancelled = false;
+    const loadLayout = async () => {
+      const requested = String(savedDocument.layout ?? "").trim();
+      const match = layoutOptions.find((n) => n.trim().toLowerCase() === requested.toLowerCase());
+      const layoutKey = (match || requested || "standard").trim() || "standard";
+      try {
+        const r = await apiRequest<{
+          value?: { companyInfoLines?: string[]; footerText?: string; logoDataUrl?: string };
+        }>(`/api/settings/invoicing-document-layout/${encodeURIComponent(layoutKey)}`);
+        const val = r?.value;
+        if (cancelled || !val) return;
+        const lines = Array.isArray(val.companyInfoLines) ? val.companyInfoLines.map((x) => String(x ?? "")) : [];
+        setPreviewLayout({
+          companyInfoLines: Array.from({ length: 6 }).map((_, i) => lines[i] ?? ""),
+          footerText: String(val.footerText ?? ""),
+          logoDataUrl: String(val.logoDataUrl ?? ""),
+        });
+      } catch {
+        if (!cancelled) setPreviewLayout(null);
+      }
+    };
+    void loadLayout();
+    return () => {
+      cancelled = true;
+    };
+  }, [documentPhase, savedDocument, layoutOptions]);
 
   useEffect(() => {
     if (!productsOpen) return;
@@ -431,11 +602,15 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     setSavingItem(true);
     setSaveItemError("");
     try {
-      const saved = await apiRequest<LineItem>("/api/webpanel/invoicing/line-items", {
-        method: "POST",
-        body: JSON.stringify(newItem),
-      });
-      setItems((prev) => [...prev, saved]);
+      if (editingSavedDocument) {
+        setItems((prev) => [...prev, newItem]);
+      } else {
+        const saved = await apiRequest<LineItem>("/api/webpanel/invoicing/line-items", {
+          method: "POST",
+          body: JSON.stringify(newItem),
+        });
+        setItems((prev) => [...prev, saved]);
+      }
     } catch {
       setSaveItemError("Failed to save line item to database.");
       return;
@@ -470,9 +645,11 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     setSavingItem(true);
     setSaveItemError("");
     try {
-      await apiRequest<void>(`/api/webpanel/invoicing/line-items/${id}`, {
-        method: "DELETE",
-      });
+      if (!editingSavedDocument) {
+        await apiRequest<void>(`/api/webpanel/invoicing/line-items/${id}`, {
+          method: "DELETE",
+        });
+      }
       setItems((prev) => prev.filter((i) => i.id !== id));
       if (editingItemId === id) setEditingItemId(null);
     } catch {
@@ -487,9 +664,11 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     setSavingItem(true);
     setSaveItemError("");
     try {
-      await apiRequest<void>("/api/webpanel/invoicing/line-items", {
-        method: "DELETE",
-      });
+      if (!editingSavedDocument) {
+        await apiRequest<void>("/api/webpanel/invoicing/line-items", {
+          method: "DELETE",
+        });
+      }
       setItems([]);
       setEditingItemId(null);
     } catch {
@@ -634,7 +813,12 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     setSavingItem(true);
     setSaveItemError("");
     try {
-      if (editingIsNewItem) {
+      if (editingSavedDocument) {
+        const { id: _lid, createdAt: _c, updatedAt: _u, ...rest } = payload;
+        setItems((prev) =>
+          prev.map((it) => (it.id === editingItemId ? { ...it, ...rest, id: it.id } : it)),
+        );
+      } else if (editingIsNewItem) {
         const created = await apiRequest<LineItem>("/api/webpanel/invoicing/line-items", {
           method: "POST",
           body: JSON.stringify(payload),
@@ -656,7 +840,7 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!selectedCustomer) {
       toast({
         variant: "destructive",
@@ -664,7 +848,55 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
       });
       return;
     }
-    onOpenChange(false);
+    if (items.length === 0) {
+      toast({
+        variant: "destructive",
+        description: t("invoicingDocumentNoLines"),
+      });
+      return;
+    }
+    const docDate = new Date(date);
+    docDate.setHours(12, 0, 0, 0);
+    const linePayload = items.map(({ id: _id, createdAt: _c, updatedAt: _u, ...rest }) => rest);
+    const body = {
+      kind,
+      layout,
+      docLang,
+      paymentTerm: payTerm,
+      paymentMethod: payMethod,
+      documentDate: docDate.toISOString(),
+      alreadyPaid: totals.paid,
+      notes,
+      attachmentPos,
+      attachmentText,
+      customerId: selectedCustomer.id?.trim() || null,
+      customerJson: selectedCustomer,
+      items: linePayload,
+      subtotalExcl: totals.mvh,
+      vatTotal: totals.vat,
+      totalIncl: totals.total,
+      dueAmount: totals.due,
+    };
+    const editId = documentIdToEdit?.trim();
+    setSavingDocument(true);
+    try {
+      const res = await apiRequest<{ document: SavedInvoicingDocumentDTO }>(
+        editId ? `/api/webpanel/invoicing/documents/${encodeURIComponent(editId)}` : "/api/webpanel/invoicing/documents",
+        { method: editId ? "PATCH" : "POST", body: JSON.stringify(body) },
+      );
+      if (res?.document) {
+        setSavedDocument(res.document);
+        setDocumentPhase("preview");
+        toast({ description: editId ? t("invoicingDocumentUpdated") : t("invoicingDocumentSaved") });
+      }
+    } catch {
+      toast({
+        variant: "destructive",
+        description: t("invoicingDocumentSaveFailed"),
+      });
+    } finally {
+      setSavingDocument(false);
+    }
   };
 
   const resetNewCustomerForm = () => {
@@ -692,13 +924,16 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
       const company = String(created.companyName ?? "").trim();
       const customerName = String(created.name ?? "").trim();
       const displayName = company || customerName;
+      const createdEmail = String(created.email ?? "").trim();
       setSelectedCustomer({
+        id: String(created.id ?? "").trim() || undefined,
         name: displayName || "-",
         subName: displayName && customerName && displayName !== customerName ? customerName : undefined,
         street: street || "-",
         postalCity: [postalCode, city].filter(Boolean).join(" ").trim() || "-",
         country: String(created.country ?? "").trim() || undefined,
         vatNumber: String(created.vatNumber ?? "").trim() || "-",
+        email: createdEmail || undefined,
       });
       setNewCustomerOpen(false);
       resetNewCustomerForm();
@@ -780,9 +1015,31 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
   ];
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl p-0 overflow-hidden">
-        <DialogTitle className="sr-only">{t("newDocument")}</DialogTitle>
+    <Dialog open={open} onOpenChange={handleMainDialogOpenChange}>
+      <DialogContent
+        className={cn(
+          "p-0 overflow-hidden",
+          documentPhase === "preview" ? "max-w-3xl [&>button:last-child]:hidden" : "max-w-6xl",
+        )}
+      >
+        <DialogTitle className="sr-only">
+          {documentPhase === "preview"
+            ? t("invoicingPreviewSrTitle")
+            : editingSavedDocument
+              ? t("invoicingEditDocument")
+              : t("newDocument")}
+        </DialogTitle>
+        {documentPhase === "preview" && savedDocument ? (
+          <InvoicingDocumentPreview
+            document={savedDocument}
+            layout={previewLayout}
+            docKindLabel={invoicingDocKindLabel(savedDocument.kind, t)}
+            t={t}
+            onClose={() => handleMainDialogOpenChange(false)}
+            onToolbarStub={() => toast({ description: t("invoicingToolbarNotYet") })}
+          />
+        ) : (
+          <>
         <div className="bg-muted/40 border-b border-border px-6 pt-5 pb-4">
           {TopTabs}
         </div>
@@ -826,7 +1083,11 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                           <Select value={layout} onValueChange={setLayout}>
                             <SelectTrigger className="h-8 w-44"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="standard">{t("docLayoutStandard")}</SelectItem>
+                              {layoutOptions.map((name) => (
+                                <SelectItem key={name} value={name}>
+                                  {layoutSelectLabel(name, t)}
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                           <Select value={docLang} onValueChange={setDocLang}>
@@ -890,10 +1151,12 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
                   <div className="flex justify-center mt-4">
                     <Button
                       variant="ghost"
-                      onClick={handleSave}
+                      onClick={() => void handleSave()}
+                      disabled={savingDocument}
                       className="gap-2 text-foreground hover:text-primary"
                     >
-                      <Save className="h-4 w-4" /> {t("save")}
+                      {savingDocument ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      {t("save")}
                     </Button>
                   </div>
                 </div>
@@ -1145,10 +1408,12 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
               <div className="flex items-center justify-center gap-12">
                 <Button
                   variant="ghost"
-                  onClick={handleSave}
+                  onClick={() => void handleSave()}
+                  disabled={savingDocument}
                   className="gap-2 text-foreground hover:text-primary"
                 >
-                  <Save className="h-4 w-4" /> {t("save")}
+                  {savingDocument ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {t("save")}
                 </Button>
                 <Button
                   variant="ghost"
@@ -1192,6 +1457,8 @@ export function NewDocumentDialog({ open, onOpenChange }: NewDocumentDialogProps
             </div>
           )}
         </div>
+          </>
+        )}
       </DialogContent>
       <ExistingCustomersDialog
         open={customersOpen}

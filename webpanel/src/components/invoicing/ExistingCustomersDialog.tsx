@@ -6,12 +6,14 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { apiRequest } from "@/lib/api";
 
 export interface ExistingCustomer {
+  id?: string;
   name: string;
   subName?: string;
   street: string;
   postalCity: string;
   country?: string;
   vatNumber: string;
+  email?: string;
 }
 
 interface ExistingCustomersDialogProps {
@@ -54,14 +56,18 @@ export function ExistingCustomersDialog({
           const city = String(row.city ?? "").trim();
           const country = String(row.country ?? "").trim();
           const vatNumber = String(row.vatNumber ?? "").trim();
+          const email = String(row.email ?? "").trim();
           const displayName = companyName || nameFallback || [firstName, lastName].filter(Boolean).join(" ").trim();
+          const idRaw = String(row.id ?? "").trim();
           return {
+            id: idRaw || undefined,
             name: displayName || "-",
             subName: displayName && nameFallback && displayName !== nameFallback ? nameFallback : undefined,
             street: street || "-",
             postalCity: [postalCode, city].filter(Boolean).join(" ").trim() || "-",
             country: country || undefined,
             vatNumber: vatNumber || "-",
+            email: email || undefined,
           } as ExistingCustomer;
         });
         setCustomers(mapped);
@@ -79,7 +85,7 @@ export function ExistingCustomersDialog({
     const q = query.trim().toLowerCase();
     if (!q) return customers;
     return customers.filter((c) =>
-      [c.name, c.subName, c.street, c.postalCity, c.vatNumber]
+      [c.name, c.subName, c.street, c.postalCity, c.vatNumber, c.email]
         .filter(Boolean)
         .some((v) => v!.toLowerCase().includes(q))
     );
@@ -118,7 +124,7 @@ export function ExistingCustomersDialog({
           <div className="divide-y divide-border">
             {filtered.map((c, i) => (
               <button
-                key={i}
+                key={c.id || `cust-${i}`}
                 onClick={() => {
                   onSelect(c);
                   onOpenChange(false);

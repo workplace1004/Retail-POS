@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { FileText, Plus, FileBarChart, Users as UsersIcon, Settings, ChevronRight, Pencil, Trash2, Save, Video } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { format } from "date-fns";
+import { FileText, Plus, FileBarChart, Users as UsersIcon, Settings, ChevronRight, Pencil, Trash2, Save, Video, Check, Coins, Loader2 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { PageHeader } from "@/components/PageHeader";
 import { TabsBar } from "@/components/TabsBar";
@@ -15,7 +16,42 @@ import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 import { NewDocumentDialog } from "@/components/invoicing/NewDocumentDialog";
+import {
+  InvoicingDocumentPreview,
+  type InvoicingPreviewLayout,
+  type SavedInvoicingDocumentDTO,
+} from "@/components/invoicing/InvoicingDocumentPreview";
 import { DataPagination } from "@/components/DataPagination";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+
+type InvoicingDocumentListRow = {
+  id: string;
+  displayNumber: number;
+  kind: string;
+  documentDate: string;
+  totalIncl: number;
+  dueAmount: number;
+  alreadyPaid: number;
+  customerName: string;
+};
+
+function parseMoneyInput(raw: string): number {
+  const normalized = String(raw ?? "").trim().replace(/\s/g, "").replace(",", ".");
+  if (normalized === "") return 0;
+  const n = Number(normalized);
+  return Number.isFinite(n) ? Math.max(0, n) : Number.NaN;
+}
+
+function invoicingDocKindLabel(kind: string, tr: (k: TranslationKey) => string) {
+  const map: Record<string, TranslationKey> = {
+    invoice: "docKindInvoice",
+    "invoice-tickets": "docKindInvoiceFromTickets",
+    quotation: "docKindQuotation",
+    credit: "docKindCreditNote",
+    delivery: "docKindDeliveryNote",
+  };
+  return tr(map[kind] ?? "docKindInvoice");
+}
 
 type InvoicingDocumentLayoutOptions = {
   firstInvoiceNr: number;
@@ -49,6 +85,47 @@ const DEFAULT_DOCUMENT_LAYOUT_OPTIONS: InvoicingDocumentLayoutOptions = {
   showVatPercent: false,
 };
 
+/** Module-level so React keeps the same component type across parent re-renders (avoids input focus loss). */
+function FormRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[180px_1fr] items-center gap-4 py-1.5">
+      <label className="text-sm text-foreground">{label} :</label>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function InvoicingLayoutTabs({
+  layouts,
+  activeLayout,
+  onSelectLayout,
+}: {
+  layouts: string[];
+  activeLayout: string;
+  onSelectLayout: (name: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-6 justify-center pb-3 border-b border-border mb-5">
+      {layouts.map((l) => {
+        const isActive = activeLayout === l;
+        return (
+          <button
+            key={l}
+            type="button"
+            onClick={() => onSelectLayout(l)}
+            className={cn(
+              "text-sm font-medium transition-colors",
+              isActive ? "text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {l}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 const Invoicing = () => {
   const { t } = useLanguage();
   const [tab, setTab] = useState("docs");
@@ -58,8 +135,23 @@ const Invoicing = () => {
   const [layouts, setLayouts] = useState<string[]>([]);
   const [newLayout, setNewLayout] = useState("");
   const [newDocOpen, setNewDocOpen] = useState(false);
+  const [documentIdToEdit, setDocumentIdToEdit] = useState<string | null>(null);
+  const [docTypeFilter, setDocTypeFilter] = useState("invoices");
+  const [monthFilter, setMonthFilter] = useState("all");
+  const [yearFilter, setYearFilter] = useState(() => String(new Date().getFullYear()));
+  const [documents, setDocuments] = useState<InvoicingDocumentListRow[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [docsFetchError, setDocsFetchError] = useState("");
   const [docsPage, setDocsPage] = useState(1);
   const [docsPageSize, setDocsPageSize] = useState(10);
+  const prevNewDocOpen = useRef(false);
+  const [paymentModalDoc, setPaymentModalDoc] = useState<InvoicingDocumentListRow | null>(null);
+  const [paymentReceivedStr, setPaymentReceivedStr] = useState("0.00");
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [docPreviewOpen, setDocPreviewOpen] = useState(false);
+  const [docPreviewLoading, setDocPreviewLoading] = useState(false);
+  const [docPreview, setDocPreview] = useState<SavedInvoicingDocumentDTO | null>(null);
+  const [docPreviewLayout, setDocPreviewLayout] = useState<InvoicingPreviewLayout | null>(null);
   const [perPage, setPerPage] = useState(1);
   const [perPageSize, setPerPageSize] = useState(10);
   const [docLayoutOptions, setDocLayoutOptions] = useState<InvoicingDocumentLayoutOptions>(DEFAULT_DOCUMENT_LAYOUT_OPTIONS);
@@ -98,17 +190,141 @@ const Invoicing = () => {
     { name: "pospoint", total: "5.62" },
   ];
 
-  const docRows: { number: string; date: string; customer: string; total: string; status: string }[] = [];
+  const loadDocuments = useCallback(async () => {
+    setDocsLoading(true);
+    setDocsFetchError("");
+    try {
+      const qs = new URLSearchParams({
+        type: docTypeFilter,
+        month: monthFilter,
+        year: yearFilter,
+      });
+      const res = await apiRequest<{ documents?: InvoicingDocumentListRow[] }>(
+        `/api/webpanel/invoicing/documents?${qs.toString()}`
+      );
+      const rows = Array.isArray(res?.documents) ? res.documents : [];
+      setDocuments(rows);
+    } catch {
+      setDocuments([]);
+      setDocsFetchError("err");
+    } finally {
+      setDocsLoading(false);
+    }
+  }, [docTypeFilter, monthFilter, yearFilter]);
+
+  useEffect(() => {
+    setDocsPage(1);
+  }, [docTypeFilter, monthFilter, yearFilter]);
+
+  useEffect(() => {
+    if (tab !== "docs") return;
+    void loadDocuments();
+  }, [tab, loadDocuments]);
+
+  useEffect(() => {
+    if (prevNewDocOpen.current && !newDocOpen && tab === "docs") {
+      void loadDocuments();
+    }
+    prevNewDocOpen.current = newDocOpen;
+  }, [newDocOpen, tab, loadDocuments]);
+
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(documents.length / docsPageSize) || 1);
+    if (docsPage > tp) setDocsPage(tp);
+  }, [documents.length, docsPageSize, docsPage]);
 
   const pagedDocRows = useMemo(() => {
     const start = (docsPage - 1) * docsPageSize;
-    return docRows.slice(start, start + docsPageSize);
-  }, [docRows, docsPage, docsPageSize]);
+    return documents.slice(start, start + docsPageSize);
+  }, [documents, docsPage, docsPageSize]);
 
   const pagedCustomerRows = useMemo(() => {
     const start = (perPage - 1) * perPageSize;
     return customerRows.slice(start, start + perPageSize);
   }, [customerRows, perPage, perPageSize]);
+
+  const handlePaymentModalOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      setPaymentModalDoc(null);
+      setPaymentReceivedStr("0.00");
+      setPaymentSaving(false);
+    }
+  }, []);
+
+  const handleLoadFullDue = useCallback(() => {
+    if (!paymentModalDoc) return;
+    const due = Math.max(0, Number(paymentModalDoc.dueAmount) || 0);
+    setPaymentReceivedStr(due.toFixed(2));
+  }, [paymentModalDoc]);
+
+  const handleSavePayment = useCallback(async () => {
+    if (!paymentModalDoc) return;
+    const received = parseMoneyInput(paymentReceivedStr);
+    if (Number.isNaN(received)) {
+      toast({ variant: "destructive", description: t("invoicingPaymentInvalidAmount") });
+      return;
+    }
+    setPaymentSaving(true);
+    try {
+      await apiRequest(`/api/webpanel/invoicing/documents/${encodeURIComponent(paymentModalDoc.id)}/payment`, {
+        method: "PATCH",
+        body: JSON.stringify({ received }),
+      });
+      toast({ description: t("invoicingPaymentSaved") });
+      setPaymentModalDoc(null);
+      setPaymentReceivedStr("0.00");
+      await loadDocuments();
+    } catch {
+      toast({ variant: "destructive", description: t("invoicingPaymentSaveFailed") });
+    } finally {
+      setPaymentSaving(false);
+    }
+  }, [paymentModalDoc, paymentReceivedStr, loadDocuments, t]);
+
+  const closeDocPreview = useCallback(() => {
+    setDocPreviewOpen(false);
+    setDocPreview(null);
+    setDocPreviewLayout(null);
+    setDocPreviewLoading(false);
+  }, []);
+
+  const openDocumentPreview = useCallback(
+    async (docId: string) => {
+      setDocPreviewLoading(true);
+      setDocPreviewOpen(true);
+      setDocPreview(null);
+      setDocPreviewLayout(null);
+      try {
+        const docRes = await apiRequest<{ document?: SavedInvoicingDocumentDTO }>(
+          `/api/webpanel/invoicing/documents/${encodeURIComponent(docId)}`
+        );
+        const d = docRes?.document;
+        if (!d) throw new Error("missing");
+        setDocPreview(d);
+        const layoutName = String(d.layout || "standard").trim() || "standard";
+        const layoutRes = await apiRequest<{
+          value?: { companyInfoLines?: string[]; footerText?: string; logoDataUrl?: string };
+        }>(`/api/settings/invoicing-document-layout/${encodeURIComponent(layoutName)}`);
+        const val = layoutRes?.value;
+        if (val) {
+          const lines = Array.isArray(val.companyInfoLines) ? val.companyInfoLines.map((x) => String(x ?? "")) : [];
+          setDocPreviewLayout({
+            companyInfoLines: Array.from({ length: 6 }).map((_, i) => lines[i] ?? ""),
+            footerText: String(val.footerText ?? ""),
+            logoDataUrl: String(val.logoDataUrl ?? ""),
+          });
+        } else {
+          setDocPreviewLayout(null);
+        }
+      } catch {
+        toast({ variant: "destructive", description: t("invoicingDocumentOpenFailed") });
+        closeDocPreview();
+      } finally {
+        setDocPreviewLoading(false);
+      }
+    },
+    [t, closeDocPreview],
+  );
 
   const settingsNav: { id: typeof settingsTab; label: TranslationKey }[] = [
     { id: "layouts", label: "manageLayouts" },
@@ -236,34 +452,6 @@ const Invoicing = () => {
     }
   };
 
-
-  const LayoutTabs = () => (
-    <div className="flex items-center gap-6 justify-center pb-3 border-b border-border mb-5">
-      {layouts.map((l) => {
-        const isActive = activeLayout === l;
-        return (
-          <button
-            key={l}
-            onClick={() => setActiveLayout(l)}
-            className={cn(
-              "text-sm font-medium transition-colors",
-              isActive ? "text-primary" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {l}
-          </button>
-        );
-      })}
-    </div>
-  );
-
-  const FormRow = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <div className="grid grid-cols-[180px_1fr] items-center gap-4 py-1.5">
-      <label className="text-sm text-foreground">{label} :</label>
-      <div>{children}</div>
-    </div>
-  );
-
   return (
     <AppLayout>
 
@@ -274,12 +462,15 @@ const Invoicing = () => {
           <div className="flex flex-wrap gap-3 mb-4 justify-center">
             <Button
               size="sm"
-              onClick={() => setNewDocOpen(true)}
+              onClick={() => {
+                setDocumentIdToEdit(null);
+                setNewDocOpen(true);
+              }}
               className="gap-1.5 bg-gradient-primary text-primary-foreground hover:opacity-90"
             >
               <Plus className="h-4 w-4" /> {t("newDocument")}
             </Button>
-            <Select defaultValue="invoices">
+            <Select value={docTypeFilter} onValueChange={setDocTypeFilter}>
               <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="invoices">{t("invoices")}</SelectItem>
@@ -288,7 +479,7 @@ const Invoicing = () => {
                 <SelectItem value="delivery">{t("deliveryNotes")}</SelectItem>
               </SelectContent>
             </Select>
-            <Select defaultValue="all">
+            <Select value={monthFilter} onValueChange={setMonthFilter}>
               <SelectTrigger className="w-40 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {monthOptions.map((m) => (
@@ -296,7 +487,7 @@ const Invoicing = () => {
                 ))}
               </SelectContent>
             </Select>
-            <Select defaultValue="2026">
+            <Select value={yearFilter} onValueChange={setYearFilter}>
               <SelectTrigger className="w-28 h-9"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {yearOptions.map((y) => (
@@ -306,36 +497,106 @@ const Invoicing = () => {
             </Select>
           </div>
 
-          <Card className="overflow-hidden shadow-card max-w-7xl mx-auto">
-            <div className="grid grid-cols-6 gap-4 px-5 py-3 border-b border-border bg-muted/30 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              <div>{t("number")}</div>
-              <div>{t("date")}</div>
-              <div className="col-span-2">{t("customer")}</div>
-              <div className="text-right">{t("total")}</div>
-              <div className="text-right">{t("sent")} / {t("paid")}</div>
+          <Card className="overflow-hidden shadow-card max-w-6xl mx-auto">
+            {docsFetchError ? (
+              <div className="px-5 py-2 text-sm text-destructive border-b border-border bg-destructive/5">
+                {t("invoicingDocumentsLoadFailed")}
+              </div>
+            ) : null}
+            <div className="overflow-x-auto">
+              <div className="min-w-[880px] grid grid-cols-[70px_150px_minmax(180px,1fr)_100px_100px_100px_minmax(4.5rem,auto)_50px_50px] gap-2 px-5 py-3 border-b border-border bg-muted/30 text-xs font-semibold uppercase tracking-wider text-muted-foreground items-center">
+                <div>{t("number")}</div>
+                <div>{t("date")}</div>
+                <div className="min-w-0">{t("customer")}</div>
+                <div className="text-right">{t("total")}</div>
+                <div className="text-center">{t("sent")}</div>
+                <div className="text-center">{t("paid")}</div>
+                <div aria-hidden className="min-w-[4.5rem]" />
+                <div className="text-center" aria-hidden />
+                <div className="text-center" aria-hidden />
+              </div>
+              {docsLoading ? (
+                <div className="flex justify-center py-16 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 animate-spin opacity-60" />
+                </div>
+              ) : documents.length === 0 ? (
+                <div className="px-5 py-16 text-center text-sm text-muted-foreground">
+                  <FileText className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                  <p>{t("invoicingNoDocumentsList")}</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-border min-w-[880px]">
+                  {pagedDocRows.map((r) => {
+                    const d = new Date(r.documentDate);
+                    const dateStr = Number.isFinite(d.getTime()) ? format(d, "dd-MM-yyyy") : "—";
+                    const totalStr = (Number(r.totalIncl) || 0).toFixed(2);
+                    const settled = (Number(r.dueAmount) || 0) <= 0.005;
+                    return (
+                      <div
+                        key={r.id}
+                        className="grid grid-cols-[70px_150px_minmax(180px,1fr)_100px_100px_100px_minmax(4.5rem,auto)_50px_50px] gap-2 px-5 py-3 items-center text-sm"
+                      >
+                        <div className="tabular-nums">{r.displayNumber}</div>
+                        <div className="text-muted-foreground">{dateStr}</div>
+                        <div className="min-w-0 truncate font-medium text-foreground" title={r.customerName}>
+                          {r.customerName}
+                        </div>
+                        <div className="text-right font-mono">{totalStr}</div>
+                        <div className="flex justify-center text-muted-foreground" />
+                        <div className="flex justify-center">
+                          {settled ? <Check className="h-4 w-4 text-primary" aria-label={t("paid")} /> : null}
+                        </div>
+                        <div className="flex justify-center">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 shrink-0 px-2.5 text-xs"
+                            onClick={() => void openDocumentPreview(r.id)}
+                          >
+                            {t("invoicingOpenDocument")}
+                          </Button>
+                        </div>
+                        <div className="flex justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            aria-label={t("invoicingRecordPaymentSr")}
+                            onClick={() => {
+                              setPaymentModalDoc(r);
+                              setPaymentReceivedStr("0.00");
+                            }}
+                          >
+                            <Coins className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <div className="flex justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0"
+                            aria-label={t("invoicingEditDocument")}
+                            onClick={() => {
+                              setDocumentIdToEdit(r.id);
+                              setNewDocOpen(true);
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-            {pagedDocRows.length === 0 ? (
-              <div className="px-5 py-16 text-center text-sm  text-muted-foreground">
-                <FileText className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                <p>—</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {pagedDocRows.map((r, idx) => (
-                  <div key={idx} className="grid grid-cols-6 gap-4 px-5 py-3 items-center text-sm">
-                    <div>{r.number}</div>
-                    <div>{r.date}</div>
-                    <div className="col-span-2">{r.customer}</div>
-                    <div className="text-right font-mono">{r.total}</div>
-                    <div className="text-right">{r.status}</div>
-                  </div>
-                ))}
-              </div>
-            )}
             <DataPagination
               page={docsPage}
               pageSize={docsPageSize}
-              totalItems={docRows.length}
+              totalItems={documents.length}
               onPageChange={setDocsPage}
               onPageSizeChange={(s) => { setDocsPageSize(s); setDocsPage(1); }}
             />
@@ -456,7 +717,7 @@ const Invoicing = () => {
 
             {settingsTab === "doc" && (
               <Card className="p-6 shadow-card">
-                <LayoutTabs />
+                <InvoicingLayoutTabs layouts={layouts} activeLayout={activeLayout} onSelectLayout={setActiveLayout} />
                 <div className="max-w-2xl mx-auto space-y-1">
                   <FormRow label={t("firstInvoiceNr")}>
                     <Input
@@ -723,7 +984,90 @@ const Invoicing = () => {
         </div>
       )}
 
-      <NewDocumentDialog open={newDocOpen} onOpenChange={setNewDocOpen} />
+      <NewDocumentDialog
+        open={newDocOpen}
+        onOpenChange={(next) => {
+          setNewDocOpen(next);
+          if (!next) setDocumentIdToEdit(null);
+        }}
+        documentIdToEdit={documentIdToEdit}
+      />
+
+      <Dialog open={docPreviewOpen} onOpenChange={(o) => { if (!o) closeDocPreview(); }}>
+        <DialogContent hideClose className="max-h-[92vh] max-w-3xl gap-0 overflow-hidden p-0 sm:max-w-3xl">
+          <DialogTitle className="sr-only">{t("invoicingPreviewSrTitle")}</DialogTitle>
+          {docPreviewLoading ? (
+            <div className="flex justify-center py-24 text-muted-foreground">
+              <Loader2 className="h-10 w-10 animate-spin opacity-60" />
+            </div>
+          ) : docPreview ? (
+            <InvoicingDocumentPreview
+              document={docPreview}
+              layout={docPreviewLayout}
+              docKindLabel={invoicingDocKindLabel(docPreview.kind, t)}
+              t={t}
+              onClose={closeDocPreview}
+              onToolbarStub={() => toast({ description: t("invoicingToolbarNotYet") })}
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={paymentModalDoc != null} onOpenChange={handlePaymentModalOpenChange}>
+        <DialogContent
+          hideClose
+          className="max-h-[90vh] overflow-y-auto gap-0 border-zinc-200 bg-zinc-100 p-0 pt-6 pb-5 text-zinc-950 shadow-xl sm:max-w-[380px] dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+        >
+          {paymentModalDoc ? (
+            <>
+              <DialogTitle className="sr-only">{t("invoicingRecordPaymentSr")}</DialogTitle>
+              <div className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-3 px-6 text-sm">
+                <span className="text-zinc-700 dark:text-zinc-300">{t("number")} :</span>
+                <span className="text-right font-medium tabular-nums text-zinc-950 dark:text-zinc-50">
+                  {paymentModalDoc.displayNumber}
+                </span>
+                <span className="text-zinc-700 dark:text-zinc-300">{t("total")} :</span>
+                <span className="text-right font-mono tabular-nums text-zinc-950 dark:text-zinc-50">
+                  {(Number(paymentModalDoc.totalIncl) || 0).toFixed(2)}
+                </span>
+                <span className="self-center text-zinc-700 dark:text-zinc-300">{t("invoicingPaymentReceived")} :</span>
+                <Input
+                  value={paymentReceivedStr}
+                  onChange={(e) => setPaymentReceivedStr(e.target.value)}
+                  className="h-9 w-36 justify-self-end border-zinc-300 bg-white text-right font-mono text-zinc-950 dark:border-zinc-600 dark:bg-zinc-950 dark:text-zinc-50"
+                  inputMode="decimal"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="mt-4 flex justify-center px-6">
+                <button
+                  type="button"
+                  className="text-sm font-medium text-blue-700 underline-offset-2 hover:underline dark:text-blue-400"
+                  onClick={handleLoadFullDue}
+                >
+                  {t("invoicingPaymentLoadFull")}
+                </button>
+              </div>
+              <div className="mt-5 flex justify-center px-6">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="gap-2 border-zinc-300 bg-zinc-200 text-zinc-950 hover:bg-zinc-300 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-50 dark:hover:bg-zinc-700"
+                  disabled={paymentSaving}
+                  onClick={() => void handleSavePayment()}
+                >
+                  {paymentSaving ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4 shrink-0" />
+                  )}
+                  {t("save")}
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 };

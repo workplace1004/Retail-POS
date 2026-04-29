@@ -1430,6 +1430,319 @@ app.delete('/api/webpanel/invoicing/line-items', async (req, res) => {
   }
 });
 
+function parseInvoicingDocumentJson(str, fallback) {
+  try {
+    return JSON.parse(String(str ?? ''));
+  } catch {
+    return fallback;
+  }
+}
+
+function mapInvoicingDocumentRow(row) {
+  const customer = parseInvoicingDocumentJson(row.customerJson, null);
+  const items = parseInvoicingDocumentJson(row.itemsJson, []);
+  return {
+    id: row.id,
+    displayNumber: row.displayNumber,
+    kind: row.kind,
+    layout: row.layout,
+    docLang: row.docLang,
+    paymentTerm: row.paymentTerm,
+    paymentMethod: row.paymentMethod,
+    documentDate: row.documentDate.toISOString(),
+    alreadyPaid: row.alreadyPaid,
+    notes: row.notes,
+    attachmentPos: row.attachmentPos,
+    attachmentText: row.attachmentText,
+    customerId: row.customerId,
+    customer: customer && typeof customer === 'object' ? customer : null,
+    items: Array.isArray(items) ? items : [],
+    subtotalExcl: row.subtotalExcl,
+    vatTotal: row.vatTotal,
+    totalIncl: row.totalIncl,
+    dueAmount: row.dueAmount,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function normalizeInvoicingDocumentSavePayload(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Invalid body' };
+  const trim = (v, max) => String(v ?? '').trim().slice(0, max);
+  const kind = trim(body.kind, 80) || 'invoice';
+  const layout = trim(body.layout, 120) || 'standard';
+  const docLang = trim(body.docLang, 12) || 'nl';
+  const paymentTerm = trim(body.paymentTerm, 80);
+  const paymentMethod = trim(body.paymentMethod, 80);
+  const documentDate = body.documentDate != null ? new Date(body.documentDate) : new Date();
+  if (!Number.isFinite(documentDate.getTime())) return { error: 'Invalid documentDate' };
+  const alreadyPaid = Math.max(0, Math.round(Math.max(0, Number(body.alreadyPaid) || 0) * 100) / 100);
+  const notes = trim(body.notes, 10000);
+  const attachmentPos = trim(body.attachmentPos, 32) || 'above';
+  const attachmentText = typeof body.attachmentText === 'string' ? body.attachmentText.slice(0, 500_000) : '';
+  const customerIdRaw = trim(body.customerId, 120);
+  const customerId = customerIdRaw || null;
+
+  const customerObj = body.customerJson;
+  if (customerObj != null && (typeof customerObj !== 'object' || Array.isArray(customerObj))) {
+    return { error: 'Invalid customerJson' };
+  }
+  const customerJsonStr = JSON.stringify(customerObj ?? {}).slice(0, 100_000);
+
+  const rawItems = Array.isArray(body.items) ? body.items : [];
+  if (rawItems.length === 0) return { error: 'At least one line item is required' };
+  const items = [];
+  for (const raw of rawItems) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const description = trim(raw.description, 2000);
+    if (!description) continue;
+    const qty = Math.max(0, Number(raw.qty)) || 0;
+    const totalIncl = Math.round(Math.max(0, Number(raw.totalIncl) || 0) * 100) / 100;
+    const perPieceIncl = Math.round(Math.max(0, Number(raw.perPieceIncl) || 0) * 100) / 100;
+    const perPieceExcl = Math.round(Math.max(0, Number(raw.perPieceExcl) || 0) * 100) / 100;
+    const discount = Math.min(100, Math.max(0, Math.round(Number(raw.discount) * 100) / 100)) || 0;
+    const vat = Math.min(100, Math.max(0, Math.round(Number(raw.vat) * 100) / 100)) || 0;
+    items.push({ qty, description, totalIncl, perPieceIncl, perPieceExcl, discount, vat });
+  }
+  if (items.length === 0) return { error: 'No valid line items' };
+
+  const subtotalExcl = Math.round(Math.max(0, Number(body.subtotalExcl) || 0) * 100) / 100;
+  const vatTotal = Math.round(Math.max(0, Number(body.vatTotal) || 0) * 100) / 100;
+  const totalIncl = Math.round(Math.max(0, Number(body.totalIncl) || 0) * 100) / 100;
+  const dueAmount = Math.round(Math.max(0, Number(body.dueAmount) || 0) * 100) / 100;
+
+  let itemsJsonStr;
+  try {
+    itemsJsonStr = JSON.stringify(items);
+  } catch {
+    return { error: 'Invalid items' };
+  }
+  if (itemsJsonStr.length > 2_000_000) return { error: 'Items payload too large' };
+
+  return {
+    value: {
+      kind,
+      layout,
+      docLang,
+      paymentTerm,
+      paymentMethod,
+      documentDate,
+      alreadyPaid,
+      notes,
+      attachmentPos,
+      attachmentText,
+      customerId,
+      customerJsonStr,
+      itemsJsonStr,
+      subtotalExcl,
+      vatTotal,
+      totalIncl,
+      dueAmount,
+      items,
+    },
+  };
+}
+
+app.post('/api/webpanel/invoicing/documents', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const normalized = normalizeInvoicingDocumentSavePayload(req.body);
+  if (normalized.error) return res.status(400).json({ error: normalized.error });
+  const v = normalized.value;
+  try {
+    const row = await prisma.$transaction(async (tx) => {
+      const agg = await tx.invoicingDocument.aggregate({ _max: { displayNumber: true } });
+      const displayNumber = (agg._max.displayNumber ?? 0) + 1;
+      return tx.invoicingDocument.create({
+        data: {
+          displayNumber,
+          kind: v.kind,
+          layout: v.layout,
+          docLang: v.docLang,
+          paymentTerm: v.paymentTerm,
+          paymentMethod: v.paymentMethod,
+          documentDate: v.documentDate,
+          alreadyPaid: v.alreadyPaid,
+          notes: v.notes,
+          attachmentPos: v.attachmentPos,
+          attachmentText: v.attachmentText,
+          customerId: v.customerId,
+          customerJson: v.customerJsonStr,
+          itemsJson: v.itemsJsonStr,
+          subtotalExcl: v.subtotalExcl,
+          vatTotal: v.vatTotal,
+          totalIncl: v.totalIncl,
+          dueAmount: v.dueAmount,
+        },
+      });
+    });
+    return res.status(201).json({ document: mapInvoicingDocumentRow(row) });
+  } catch (err) {
+    console.error('POST /api/webpanel/invoicing/documents', err);
+    return res.status(500).json({ error: err.message || 'Failed to save invoicing document' });
+  }
+});
+
+function invoicingCustomerDisplayName(customer) {
+  if (!customer || typeof customer !== 'object' || Array.isArray(customer)) return '—';
+  const company = String(customer.companyName ?? '').trim();
+  const name = String(customer.name ?? '').trim();
+  const first = String(customer.firstName ?? '').trim();
+  const last = String(customer.lastName ?? customer.attention ?? '').trim();
+  const combined = [first, last].filter(Boolean).join(' ').trim();
+  return company || name || combined || '—';
+}
+
+function invoicingDocumentDateRange(year, monthRaw) {
+  const y = Math.min(2099, Math.max(1970, Number(year) || new Date().getFullYear()));
+  const m = String(monthRaw ?? 'all').trim().toLowerCase();
+  const start = (mo, d = 1) => new Date(y, mo, d, 12, 0, 0, 0);
+  if (m === 'all') return { gte: start(0, 1), lt: new Date(y + 1, 0, 1, 12, 0, 0, 0) };
+  if (m === 'q1') return { gte: start(0, 1), lt: start(3, 1) };
+  if (m === 'q2') return { gte: start(3, 1), lt: start(6, 1) };
+  if (m === 'q3') return { gte: start(6, 1), lt: start(9, 1) };
+  if (m === 'q4') return { gte: start(9, 1), lt: new Date(y + 1, 0, 1, 12, 0, 0, 0) };
+  const mi = parseInt(m, 10);
+  if (Number.isFinite(mi) && mi >= 1 && mi <= 12) {
+    return { gte: start(mi - 1, 1), lt: start(mi, 1) };
+  }
+  return { gte: start(0, 1), lt: new Date(y + 1, 0, 1, 12, 0, 0, 0) };
+}
+
+app.get('/api/webpanel/invoicing/documents', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const docType = String(req.query.type || 'invoices').toLowerCase();
+  const yearQ = req.query.year;
+  const monthQ = req.query.month;
+  const year = Math.min(2099, Math.max(1970, parseInt(String(yearQ ?? ''), 10) || new Date().getFullYear()));
+  const { gte, lt } = invoicingDocumentDateRange(year, monthQ);
+  const kindMap = {
+    invoices: ['invoice', 'invoice-tickets'],
+    quotations: ['quotation'],
+    credit: ['credit'],
+    delivery: ['delivery'],
+  };
+  const kinds = kindMap[docType] || kindMap.invoices;
+  try {
+    const rows = await prisma.invoicingDocument.findMany({
+      where: {
+        kind: { in: kinds },
+        documentDate: { gte, lt },
+      },
+      orderBy: [{ documentDate: 'desc' }, { displayNumber: 'desc' }],
+      select: {
+        id: true,
+        displayNumber: true,
+        kind: true,
+        documentDate: true,
+        totalIncl: true,
+        dueAmount: true,
+        alreadyPaid: true,
+        customerJson: true,
+      },
+    });
+    const documents = rows.map((row) => ({
+      id: row.id,
+      displayNumber: row.displayNumber,
+      kind: row.kind,
+      documentDate: row.documentDate.toISOString(),
+      totalIncl: row.totalIncl,
+      dueAmount: row.dueAmount,
+      alreadyPaid: row.alreadyPaid,
+      customerName: invoicingCustomerDisplayName(parseInvoicingDocumentJson(row.customerJson, null)),
+    }));
+    return res.json({ documents });
+  } catch (err) {
+    console.error('GET /api/webpanel/invoicing/documents', err);
+    return res.status(500).json({ error: err.message || 'Failed to list invoicing documents' });
+  }
+});
+
+app.get('/api/webpanel/invoicing/documents/:id', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const id = String(req.params.id ?? '').trim();
+  if (!id) return res.status(400).json({ error: 'id is required' });
+  try {
+    const row = await prisma.invoicingDocument.findUnique({ where: { id } });
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+    return res.json({ document: mapInvoicingDocumentRow(row) });
+  } catch (err) {
+    console.error('GET /api/webpanel/invoicing/documents/:id', err);
+    return res.status(500).json({ error: err.message || 'Failed to load invoicing document' });
+  }
+});
+
+app.patch('/api/webpanel/invoicing/documents/:id', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const id = String(req.params.id ?? '').trim();
+  if (!id) return res.status(400).json({ error: 'id is required' });
+  const normalized = normalizeInvoicingDocumentSavePayload(req.body);
+  if (normalized.error) return res.status(400).json({ error: normalized.error });
+  const v = normalized.value;
+  try {
+    const existing = await prisma.invoicingDocument.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Document not found' });
+    const row = await prisma.invoicingDocument.update({
+      where: { id },
+      data: {
+        kind: v.kind,
+        layout: v.layout,
+        docLang: v.docLang,
+        paymentTerm: v.paymentTerm,
+        paymentMethod: v.paymentMethod,
+        documentDate: v.documentDate,
+        alreadyPaid: v.alreadyPaid,
+        notes: v.notes,
+        attachmentPos: v.attachmentPos,
+        attachmentText: v.attachmentText,
+        customerId: v.customerId,
+        customerJson: v.customerJsonStr,
+        itemsJson: v.itemsJsonStr,
+        subtotalExcl: v.subtotalExcl,
+        vatTotal: v.vatTotal,
+        totalIncl: v.totalIncl,
+        dueAmount: v.dueAmount,
+      },
+    });
+    return res.json({ document: mapInvoicingDocumentRow(row) });
+  } catch (err) {
+    console.error('PATCH /api/webpanel/invoicing/documents/:id', err);
+    return res.status(500).json({ error: err.message || 'Failed to update invoicing document' });
+  }
+});
+
+app.patch('/api/webpanel/invoicing/documents/:id/payment', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const id = String(req.params.id ?? '').trim();
+  if (!id) return res.status(400).json({ error: 'id is required' });
+  const receivedRaw = Number(req.body?.received);
+  const received = Number.isFinite(receivedRaw) ? Math.max(0, Math.round(receivedRaw * 100) / 100) : NaN;
+  if (!Number.isFinite(received)) return res.status(400).json({ error: 'Invalid received amount' });
+  try {
+    const updated = await prisma.$transaction(async (tx) => {
+      const doc = await tx.invoicingDocument.findUnique({ where: { id } });
+      if (!doc) return null;
+      const totalIncl = Math.round(Math.max(0, Number(doc.totalIncl) || 0) * 100) / 100;
+      const prevPaid = Math.round(Math.max(0, Number(doc.alreadyPaid) || 0) * 100) / 100;
+      const nextPaid = Math.min(totalIncl, Math.round((prevPaid + received) * 100) / 100);
+      const nextDue = Math.max(0, Math.round((totalIncl - nextPaid) * 100) / 100);
+      return tx.invoicingDocument.update({
+        where: { id },
+        data: { alreadyPaid: nextPaid, dueAmount: nextDue },
+      });
+    });
+    if (!updated) return res.status(404).json({ error: 'Document not found' });
+    return res.json({ document: mapInvoicingDocumentRow(updated) });
+  } catch (err) {
+    console.error('PATCH /api/webpanel/invoicing/documents/:id/payment', err);
+    return res.status(500).json({ error: err.message || 'Failed to update payment' });
+  }
+});
+
 /** Webpanel: best-sellers datasets (text/pie/bar) in a datetime range. */
 app.get('/api/webpanel/reports/best-sellers', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
@@ -9004,6 +9317,19 @@ app.get('/api/customers', async (req, res) => {
   } catch (err) {
     console.error('GET /api/customers', err);
     res.status(500).json({ error: err.message || 'Failed to fetch customers' });
+  }
+});
+
+app.get('/api/customers/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id ?? '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    const customer = await prisma.customer.findUnique({ where: { id } });
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    res.json(customer);
+  } catch (err) {
+    console.error('GET /api/customers/:id', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch customer' });
   }
 });
 
