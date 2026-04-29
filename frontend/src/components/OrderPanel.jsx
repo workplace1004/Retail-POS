@@ -256,6 +256,7 @@ export function OrderPanel({
   const [showPayDifferentlyModal, setShowPayDifferentlyModal] = useState(false);
   const [showPayworldStatusModal, setShowPayworldStatusModal] = useState(false);
   const [payworldStatus, setPayworldStatus] = useState({ state: 'IDLE', message: '', details: null });
+  const [terminalChargeAmount, setTerminalChargeAmount] = useState(0);
   const [payModalTargetTotal, setPayModalTargetTotal] = useState(0);
   const [payConfirmLoading, setPayConfirmLoading] = useState(false);
   const [paymentErrorMessage, setPaymentErrorMessage] = useState('');
@@ -275,7 +276,7 @@ export function OrderPanel({
   const activePayworldProviderRef = useRef('payworld');
   const cancelPayworldRequestedRef = useRef(false);
 
-  const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline'];
+  const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline', 'bancontactpro'];
 
   const usbScanBufferRef = useRef('');
   const usbScanLastTsRef = useRef(0);
@@ -943,6 +944,7 @@ export function OrderPanel({
     const amount = roundCurrency(Number(amountEuro) || 0);
     if (amount <= 0) return;
 
+    setTerminalChargeAmount(amount);
     setShowPayworldStatusModal(true);
     setPayworldStatus({
       state: 'IN_PROGRESS',
@@ -966,10 +968,13 @@ export function OrderPanel({
     activePayworldSessionIdRef.current = sessionId;
     activePayworldProviderRef.current = providerApi;
     cancelPayworldRequestedRef.current = false;
+    const initialQr = startData?.qrcodeUrl || null;
     setPayworldStatus({
       state: 'IN_PROGRESS',
-      message: `Payment in progress on ${providerLabel} terminal...`,
-      details: null,
+      message: initialQr
+        ? tr('orderPanel.bancontactScanQr', 'Scan the QR code with your Bancontact or banking app.')
+        : `Payment in progress on ${providerLabel} terminal...`,
+      details: initialQr ? { qrcodeUrl: initialQr } : null,
     });
 
     for (let i = 0; i < 150; i += 1) {
@@ -992,10 +997,16 @@ export function OrderPanel({
       const state = String(statusData?.state || '').toUpperCase();
       const statusMessage = String(statusData?.message || '').trim();
       const details = statusData?.details || null;
+      const mergedDetails =
+        details && typeof details === 'object'
+          ? { ...details, qrcodeUrl: details.qrcodeUrl || initialQr || undefined }
+          : initialQr
+            ? { qrcodeUrl: initialQr }
+            : null;
       setPayworldStatus({
         state: state || 'IN_PROGRESS',
         message: statusMessage || `Payment in progress on ${providerLabel} terminal...`,
-        details,
+        details: mergedDetails,
       });
       if (state === 'APPROVED') {
         setPayworldStatus({
@@ -1387,6 +1398,10 @@ export function OrderPanel({
       if (worldlineTotal > 0) {
         await runCardTerminalPayment('worldline', worldlineTotal);
       }
+      const bancontactproTotal = sumAmountsByIntegration(methods, amounts, 'bancontactpro');
+      if (bancontactproTotal > 0) {
+        await runCardTerminalPayment('bancontactpro', bancontactproTotal);
+      }
       await settleOrdersAfterTerminalPayment(methods, amounts, modalTargetTotal);
     } catch (err) {
       setPaymentErrorMessage(err?.message || tr('orderPanel.paymentFailed', 'Payment failed.'));
@@ -1397,6 +1412,7 @@ export function OrderPanel({
       activePayworldProviderRef.current = 'payworld';
       cancelCashmaticRequestedRef.current = false;
       cancelPayworldRequestedRef.current = false;
+      setTerminalChargeAmount(0);
     }
   };
 
@@ -1795,7 +1811,9 @@ export function OrderPanel({
             <div className="space-y-4 text-pos-text">
               <div className="flex justify-between items-center text-2xl">
                 <span>{tr('orderPanel.payworldAmount', 'Amount')}:</span>
-                <span className="font-semibold">€ {payModalTargetTotal.toFixed(2)}</span>
+                <span className="font-semibold">
+                  € {(terminalChargeAmount > 0 ? terminalChargeAmount : payModalTargetTotal).toFixed(2)}
+                </span>
               </div>
               <div className="flex justify-between items-center text-2xl">
                 <span>{tr('orderPanel.payworldStatusLabel', 'Status')}:</span>
@@ -1806,6 +1824,15 @@ export function OrderPanel({
                   {payworldStatus.message}
                 </div>
               )}
+              {payworldStatus.details?.qrcodeUrl ? (
+                <div className="flex flex-col items-center gap-3 pt-2">
+                  <img
+                    src={payworldStatus.details.qrcodeUrl}
+                    alt=""
+                    className="w-[280px] h-[280px] max-w-full bg-white p-2 rounded-lg border border-pos-border"
+                  />
+                </div>
+              ) : null}
             </div>
             <div className="mt-8 flex justify-center gap-4">
               {String(payworldStatus.state || '').toUpperCase() === 'IN_PROGRESS' ? (

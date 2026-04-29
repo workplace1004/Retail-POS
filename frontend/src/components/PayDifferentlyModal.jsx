@@ -18,7 +18,7 @@ const PAY_METHOD_ICON_PNG = {
   generic: '/card.png',
 };
 
-const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline'];
+const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline', 'bancontactpro'];
 const TERMINAL_CARD_INTEGRATIONS = new Set([
   'card',
   'payworld',
@@ -27,6 +27,7 @@ const TERMINAL_CARD_INTEGRATIONS = new Set([
   'viva',
   'viva-wallet',
   'multisafepay',
+  'bancontactpro',
 ]);
 const MANUAL_CARD_INTEGRATIONS = new Set(['generic', 'manual_card']);
 
@@ -74,6 +75,7 @@ export function PayDifferentlyModal({
   const activePayworldSessionIdRef = useRef(null);
   const activePayworldProviderRef = useRef('payworld');
   const cancelPayworldRequestedRef = useRef(false);
+  const [terminalChargeAmount, setTerminalChargeAmount] = useState(0);
 
   const reportError = useCallback(
     (message) => {
@@ -94,6 +96,7 @@ export function PayDifferentlyModal({
     setPayConfirmLoading(false);
     setShowPayworldStatusModal(false);
     setPayworldStatus({ state: 'IDLE', message: '', details: null });
+    setTerminalChargeAmount(0);
     activeCashmaticSessionIdRef.current = null;
     activePayworldSessionIdRef.current = null;
     cancelCashmaticRequestedRef.current = false;
@@ -231,6 +234,7 @@ export function PayDifferentlyModal({
     const amount = roundCurrency(Number(amountEuro) || 0);
     if (amount <= 0) return;
 
+    setTerminalChargeAmount(amount);
     setShowPayworldStatusModal(true);
     setPayworldStatus({
       state: 'IN_PROGRESS',
@@ -258,10 +262,13 @@ export function PayDifferentlyModal({
     activePayworldSessionIdRef.current = sessionId;
     activePayworldProviderRef.current = providerApi;
     cancelPayworldRequestedRef.current = false;
+    const initialQr = startData?.qrcodeUrl || null;
     setPayworldStatus({
       state: 'IN_PROGRESS',
-      message: `Payment in progress on ${providerLabel} terminal...`,
-      details: null,
+      message: initialQr
+        ? tr('orderPanel.bancontactScanQr', 'Scan the QR code with your Bancontact or banking app.')
+        : `Payment in progress on ${providerLabel} terminal...`,
+      details: initialQr ? { qrcodeUrl: initialQr } : null,
     });
 
     for (let i = 0; i < 150; i += 1) {
@@ -285,10 +292,16 @@ export function PayDifferentlyModal({
       const state = String(statusData?.state || '').toUpperCase();
       const statusMessage = String(statusData?.message || '').trim();
       const details = statusData?.details || null;
+      const mergedDetails =
+        details && typeof details === 'object'
+          ? { ...details, qrcodeUrl: details.qrcodeUrl || initialQr || undefined }
+          : initialQr
+            ? { qrcodeUrl: initialQr }
+            : null;
       setPayworldStatus({
         state: state || 'IN_PROGRESS',
         message: statusMessage || `Payment in progress on ${providerLabel} terminal...`,
-        details,
+        details: mergedDetails,
       });
       if (state === 'APPROVED') {
         setPayworldStatus({
@@ -425,6 +438,10 @@ export function PayDifferentlyModal({
       const worldlineTotal = sumAmountsByIntegration(activePaymentMethods, paymentAmounts, 'worldline');
       if (worldlineTotal > 0) {
         await runCardTerminalPayment('worldline', worldlineTotal);
+      }
+      const bancontactproTotal = sumAmountsByIntegration(activePaymentMethods, paymentAmounts, 'bancontactpro');
+      if (bancontactproTotal > 0) {
+        await runCardTerminalPayment('bancontactpro', bancontactproTotal);
       }
       await onProceedAfterTerminals(activePaymentMethods, paymentAmounts, payModalTargetTotal);
     } catch (err) {
@@ -634,7 +651,9 @@ export function PayDifferentlyModal({
             <div className="space-y-4 text-pos-text">
               <div className="flex justify-between items-center text-2xl">
                 <span>{tr('orderPanel.payworldAmount', 'Amount')}:</span>
-                <span className="font-semibold">€ {payModalTargetTotal.toFixed(2)}</span>
+                <span className="font-semibold">
+                  € {(terminalChargeAmount > 0 ? terminalChargeAmount : payModalTargetTotal).toFixed(2)}
+                </span>
               </div>
               <div className="flex justify-between items-center text-2xl">
                 <span>{tr('orderPanel.payworldStatusLabel', 'Status')}:</span>
@@ -642,6 +661,15 @@ export function PayDifferentlyModal({
               </div>
               {payworldStatus.message ? (
                 <div className="rounded-md bg-pos-surface px-4 py-3 text-xl whitespace-pre-line">{payworldStatus.message}</div>
+              ) : null}
+              {payworldStatus.details?.qrcodeUrl ? (
+                <div className="flex flex-col items-center gap-3 pt-2">
+                  <img
+                    src={payworldStatus.details.qrcodeUrl}
+                    alt=""
+                    className="w-[280px] h-[280px] max-w-full bg-white p-2 rounded-lg border border-pos-border"
+                  />
+                </div>
               ) : null}
             </div>
             <div className="mt-8 flex justify-center gap-4">

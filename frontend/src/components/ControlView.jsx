@@ -911,10 +911,19 @@ export function ControlView({
   const [worldlineName, setWorldlineName] = useState('Worldline RX5000');
   const [worldlineIpAddress, setWorldlineIpAddress] = useState('');
   const [worldlinePort, setWorldlinePort] = useState('9001');
+  const [worldlineTerminalConnectsToPos, setWorldlineTerminalConnectsToPos] = useState(true);
   const [worldlineSimulate, setWorldlineSimulate] = useState(true);
   const [worldlineActiveField, setWorldlineActiveField] = useState('name');
   const [savingWorldline, setSavingWorldline] = useState(false);
   const [worldlineTerminalId, setWorldlineTerminalId] = useState(null);
+
+  const [bancontactProName, setBancontactProName] = useState('Bancontact Pro QR');
+  const [bancontactProApiKey, setBancontactProApiKey] = useState('');
+  const [bancontactProSandbox, setBancontactProSandbox] = useState(true);
+  const [bancontactProCallbackUrl, setBancontactProCallbackUrl] = useState('');
+  const [bancontactProActiveField, setBancontactProActiveField] = useState('name');
+  const [savingBancontactPro, setSavingBancontactPro] = useState(false);
+  const [bancontactProTerminalId, setBancontactProTerminalId] = useState(null);
 
   useEffect(() => {
     if (topNavId === 'external-devices' && (subNavId === 'Payworld' || subNavId === 'CCV')) {
@@ -4843,6 +4852,7 @@ export function ControlView({
         if (s.ip != null) setWorldlineIpAddress(String(s.ip));
         if (s.port != null) setWorldlinePort(String(s.port));
         if (s.simulate != null) setWorldlineSimulate(!!s.simulate);
+        if (s.terminalConnectsToPos != null) setWorldlineTerminalConnectsToPos(!!s.terminalConnectsToPos);
       }
     } catch (_) { }
     const loadWorldlineFromDb = async () => {
@@ -4859,7 +4869,17 @@ export function ControlView({
         } catch (_) { }
         setWorldlineTerminalId(wl.id || null);
         if (wl.name != null) setWorldlineName(String(wl.name));
-        if (parsed.ip != null) setWorldlineIpAddress(String(parsed.ip));
+        if (parsed.terminalConnectsToPos === false) {
+          setWorldlineTerminalConnectsToPos(false);
+          if (parsed.ip != null) setWorldlineIpAddress(String(parsed.ip));
+        } else if (parsed.terminalConnectsToPos === true || parsed.terminalConnectsToPos === 1) {
+          setWorldlineTerminalConnectsToPos(true);
+        } else if (parsed.ip && String(parsed.ip).trim()) {
+          setWorldlineTerminalConnectsToPos(false);
+          setWorldlineIpAddress(String(parsed.ip).trim());
+        } else {
+          setWorldlineTerminalConnectsToPos(true);
+        }
         if (parsed.port != null) setWorldlinePort(String(parsed.port));
         if (parsed.simulate != null) setWorldlineSimulate(!!parsed.simulate);
       } catch {
@@ -4872,11 +4892,49 @@ export function ControlView({
 
   useEffect(() => {
     if (topNavId !== 'external-devices' || subNavId !== 'Card') return;
+    let cancelled = false;
+    try {
+      const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_bancontact_pro');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.name != null) setBancontactProName(String(s.name));
+        if (s.sandbox != null) setBancontactProSandbox(!!s.sandbox);
+      }
+    } catch (_) { }
+    const loadBancontactProFromDb = async () => {
+      try {
+        const res = await fetch(`${API}/payment-terminals`);
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return;
+        const terminals = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+        const row = terminals.find((t) => String(t?.type || '').toLowerCase() === 'bancontact_pro');
+        if (!row || cancelled) return;
+        let parsed = {};
+        try {
+          parsed = typeof row.connection_string === 'string' ? JSON.parse(row.connection_string) : (row.connection_string || {});
+        } catch (_) { }
+        setBancontactProTerminalId(row.id || null);
+        if (row.name != null) setBancontactProName(String(row.name));
+        if (parsed.apiKey != null) setBancontactProApiKey(String(parsed.apiKey));
+        else if (parsed.api_key != null) setBancontactProApiKey(String(parsed.api_key));
+        if (parsed.sandbox != null) setBancontactProSandbox(!!parsed.sandbox);
+        if (parsed.callbackUrl != null) setBancontactProCallbackUrl(String(parsed.callbackUrl));
+        else if (parsed.callback_url != null) setBancontactProCallbackUrl(String(parsed.callback_url));
+      } catch {
+        // Keep local values if backend is unavailable.
+      }
+    };
+    loadBancontactProFromDb();
+    return () => { cancelled = true; };
+  }, [topNavId, subNavId]);
+
+  useEffect(() => {
+    if (topNavId !== 'external-devices' || subNavId !== 'Card') return;
     try {
       const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_card_terminal_provider');
       if (!raw) return;
       const provider = String(raw).trim().toLowerCase();
-      if (provider === 'payworld' || provider === 'ccv' || provider === 'viva' || provider === 'worldline') {
+      if (provider === 'payworld' || provider === 'ccv' || provider === 'viva' || provider === 'worldline' || provider === 'bancontactpro') {
         setCardTerminalProvider(provider);
       }
     } catch (_) {
@@ -5332,14 +5390,16 @@ export function ControlView({
       const trimmedPort = String(worldlinePort || '').trim();
       const resolvedPort = trimmedPort || '9001';
       const validPort = Number.parseInt(resolvedPort, 10);
-      if (!trimmedIp) {
-        throw new Error('Worldline IP address is required.');
-      }
-      if (/^[0-9]+$/.test(trimmedIp)) {
-        throw new Error('Worldline IP address is invalid. Please enter a full IP like 192.168.1.60.');
-      }
       if (!Number.isInteger(validPort) || validPort < 1 || validPort > 65535) {
         throw new Error('Worldline port must be a number between 1 and 65535.');
+      }
+      if (!worldlineTerminalConnectsToPos) {
+        if (!trimmedIp) {
+          throw new Error('Worldline terminal IP is required when the POS connects to the terminal.');
+        }
+        if (/^[0-9]+$/.test(trimmedIp)) {
+          throw new Error('Worldline terminal IP is invalid. Please enter a full IP like 192.168.1.60.');
+        }
       }
 
       let merged = {};
@@ -5361,12 +5421,18 @@ export function ControlView({
 
       const connectionConfig = {
         ...merged,
-        ip: trimmedIp,
-        port: resolvedPort,
         model: 'RX5000',
         protocol: 'ctep',
         simulate: !!worldlineSimulate,
+        terminalConnectsToPos: !!worldlineTerminalConnectsToPos,
+        listenHost: '0.0.0.0',
+        port: resolvedPort,
       };
+      if (worldlineTerminalConnectsToPos) {
+        delete connectionConfig.ip;
+      } else {
+        connectionConfig.ip = trimmedIp;
+      }
       const terminalPayload = {
         name: String(worldlineName || '').trim() || 'Worldline Terminal',
         type: 'worldline',
@@ -5401,6 +5467,7 @@ export function ControlView({
           ip: connectionConfig.ip,
           port: connectionConfig.port,
           simulate: !!worldlineSimulate,
+          terminalConnectsToPos: !!worldlineTerminalConnectsToPos,
         }));
       }
       showToast('success', 'Worldline settings saved.');
@@ -5408,6 +5475,62 @@ export function ControlView({
       showToast('error', err?.message || 'Failed to save Worldline settings.');
     } finally {
       setSavingWorldline(false);
+    }
+  };
+
+  const handleSaveBancontactPro = async () => {
+    setSavingBancontactPro(true);
+    try {
+      const apiKey = String(bancontactProApiKey || '').trim();
+      if (!apiKey) {
+        throw new Error('Bancontact Pro API key is required.');
+      }
+      const callbackTrim = String(bancontactProCallbackUrl || '').trim();
+      const connectionConfig = {
+        apiKey,
+        sandbox: !!bancontactProSandbox,
+        ...(callbackTrim ? { callbackUrl: callbackTrim } : {}),
+      };
+      const terminalPayload = {
+        name: String(bancontactProName || '').trim() || 'Bancontact Pro QR',
+        type: 'bancontact_pro',
+        connection_type: 'https',
+        connection_string: JSON.stringify(connectionConfig),
+        enabled: 1,
+        is_main: 1,
+      };
+      let terminalId = bancontactProTerminalId;
+      if (!terminalId) {
+        const listRes = await fetch(`${API}/payment-terminals`);
+        const listData = await listRes.json().catch(() => null);
+        const list = Array.isArray(listData?.data) ? listData.data : (Array.isArray(listData) ? listData : []);
+        const existing = list.find((t) => String(t?.type || '').toLowerCase() === 'bancontact_pro');
+        if (existing?.id) terminalId = existing.id;
+      }
+      const endpoint = terminalId ? `${API}/payment-terminals/${terminalId}` : `${API}/payment-terminals`;
+      const method = terminalId ? 'PUT' : 'POST';
+      const saveRes = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(terminalPayload),
+      });
+      const saved = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) {
+        throw new Error(saved?.error || `Failed to save Bancontact Pro terminal (HTTP ${saveRes.status})`);
+      }
+      if (saved?.id) setBancontactProTerminalId(saved.id);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('pos_bancontact_pro', JSON.stringify({
+          name: terminalPayload.name,
+          sandbox: !!bancontactProSandbox,
+          hasApiKey: true,
+        }));
+      }
+      showToast('success', 'Bancontact Pro QR settings saved.');
+    } catch (err) {
+      showToast('error', err?.message || 'Failed to save Bancontact Pro settings.');
+    } finally {
+      setSavingBancontactPro(false);
     }
   };
 
@@ -5455,14 +5578,26 @@ export function ControlView({
 
   const worldlineKeyboardValue =
     worldlineActiveField === 'name' ? worldlineName
-      : worldlineActiveField === 'ip' ? worldlineIpAddress
+      : worldlineActiveField === 'ip' && !worldlineTerminalConnectsToPos ? worldlineIpAddress
         : worldlineActiveField === 'port' ? worldlinePort
           : '';
 
   const worldlineKeyboardOnChange = (v) => {
     if (worldlineActiveField === 'name') setWorldlineName(v);
-    else if (worldlineActiveField === 'ip') setWorldlineIpAddress(v);
+    else if (worldlineActiveField === 'ip' && !worldlineTerminalConnectsToPos) setWorldlineIpAddress(v);
     else if (worldlineActiveField === 'port') setWorldlinePort(v);
+  };
+
+  const bancontactProKeyboardValue =
+    bancontactProActiveField === 'name' ? bancontactProName
+      : bancontactProActiveField === 'apiKey' ? bancontactProApiKey
+        : bancontactProActiveField === 'callback' ? bancontactProCallbackUrl
+          : '';
+
+  const bancontactProKeyboardOnChange = (v) => {
+    if (bancontactProActiveField === 'name') setBancontactProName(v);
+    else if (bancontactProActiveField === 'apiKey') setBancontactProApiKey(v);
+    else if (bancontactProActiveField === 'callback') setBancontactProCallbackUrl(v);
   };
 
   const ccvKeyboardValue =
@@ -6390,6 +6525,7 @@ export function ControlView({
           handleSaveCcv,
           handleSaveViva,
           handleSaveWorldline,
+          handleSaveBancontactPro,
           handleSavePriceDisplay,
           handleSaveProductionTickets,
           handleSaveReportSettings,
@@ -6445,6 +6581,8 @@ export function ControlView({
           worldlineName,
           worldlineIpAddress,
           worldlinePort,
+          worldlineTerminalConnectsToPos,
+          setWorldlineTerminalConnectsToPos,
           worldlineSimulate,
           setWorldlineSimulate,
           worldlineKeyboardOnChange,
@@ -6456,6 +6594,17 @@ export function ControlView({
           ccvWorkstationId,
           ccvKeyboardOnChange,
           ccvKeyboardValue,
+          bancontactProName,
+          setBancontactProName,
+          bancontactProApiKey,
+          setBancontactProApiKey,
+          bancontactProSandbox,
+          setBancontactProSandbox,
+          bancontactProCallbackUrl,
+          setBancontactProCallbackUrl,
+          setBancontactProActiveField,
+          bancontactProKeyboardOnChange,
+          bancontactProKeyboardValue,
           periodicReportEndDate,
           periodicReportEndTime,
           periodicReportLines,
@@ -6506,6 +6655,7 @@ export function ControlView({
           savingCcv,
           savingViva,
           savingWorldline,
+          savingBancontactPro,
           savingPriceDisplay,
           savingProdTickets,
           savingReportSettings,

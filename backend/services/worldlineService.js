@@ -39,7 +39,8 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   };
 
   const ip = get('ip', 'ipAddress', 'ip_address', 'host', 'hostname') || String(defaults.ip || '').trim();
-  const portRaw = get('port', 'Port');
+  const portRaw = get('port', 'Port', 'listenPort', 'listen_port');
+  const listenHostRaw = get('listenHost', 'listen_host', 'bindAddress', 'bind_address') || '0.0.0.0';
   const timeoutMsRaw = get('timeoutMs', 'timeout', 'timeout_ms');
   const bridgeUrl = get('bridgeUrl', 'bridge_url', 'worldlineBridgeUrl') || String(process.env.WORLDLINE_BRIDGE_URL || '').trim();
   const saleBodyTemplate = get('saleBodyTemplate', 'sale_body_template', 'ctepSaleBody');
@@ -55,10 +56,29 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const envSim = String(process.env.WORLDLINE_SIMULATE || '').trim() === '1';
   const simulate = envSim || parseBool(get('simulate', 'testMode', 'test_mode'));
 
-  if (!ip) throw new Error('Worldline IP address not found in terminal configuration.');
+  const dirExplicit = get('terminalConnectsToPos', 'terminal_connects_to_pos', 'inboundListener');
+  let terminalConnectsToPos;
+  if (dirExplicit !== '') {
+    const low = String(dirExplicit).toLowerCase();
+    if (low === 'outbound' || low === '0' || low === 'false' || low === 'no') {
+      terminalConnectsToPos = false;
+    } else if (low === 'inbound' || low === 'listener' || low === '1' || low === 'true' || low === 'yes') {
+      terminalConnectsToPos = true;
+    } else {
+      terminalConnectsToPos = parseBool(dirExplicit);
+    }
+  } else if (ip) {
+    terminalConnectsToPos = false;
+  } else {
+    terminalConnectsToPos = true;
+  }
 
   const parsedPort = Number.parseInt(portRaw || '0', 10);
   const parsedTimeoutMs = Number.parseInt(timeoutMsRaw || String(defaults.timeoutMs || ''), 10);
+
+  if (!terminalConnectsToPos && !ip) {
+    throw new Error('Worldline terminal IP is required when the POS connects to the terminal (outbound mode).');
+  }
 
   let approveRegex;
   try {
@@ -73,9 +93,15 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     declineRegex = /declin|refus/i;
   }
 
+  const listenPort = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 9001;
+  const listenHost = listenHostRaw || '0.0.0.0';
+
   return {
+    terminalConnectsToPos,
+    listenHost,
+    listenPort,
     ip,
-    port: Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 9001,
+    port: listenPort,
     timeoutMs: Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0 ? parsedTimeoutMs : 180000,
     currencyCode: currencyCode || 'EUR',
     simulate,
@@ -144,11 +170,90 @@ function tcpProbe(host, port, ms = 8000) {
   });
 }
 
-function tcpSendAndRead(config, payload) {
+/** Terminal (client) connects to this POS — one accepted socket per payment. */
+function listenForTerminalSocket(host, port, timeoutMs, isCancelled, onListening) {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    let settled = false;
+    let pollIv = null;
+
+    const stopPoll = () => {
+      if (pollIv) {
+        clearInterval(pollIv);
+        pollIv = null;
+      }
+    };
+
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stopPoll();
+      try {
+        srv.close();
+      } catch {
+        // ignore
+      }
+      reject(err);
+    };
+
+    let timer;
+    timer = setTimeout(() => {
+      fail(
+        new Error(
+          'Timeout waiting for the Worldline terminal to connect to this POS. On the device, set the ECR/cash register IP to this machine and the same port as configured here.',
+        ),
+      );
+    }, timeoutMs);
+
+    pollIv = setInterval(() => {
+      try {
+        if (isCancelled()) fail(new Error('Cancelled'));
+      } catch {
+        // ignore
+      }
+    }, 400);
+
+    srv.once('connection', (socket) => {
+      if (settled) {
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      stopPoll();
+      try {
+        srv.close();
+      } catch {
+        // ignore
+      }
+      socket.setTimeout(0);
+      resolve(socket);
+    });
+
+    srv.on('error', (err) => {
+      clearTimeout(timer);
+      fail(err);
+    });
+
+    srv.listen(port, host, () => {
+      try {
+        onListening?.();
+      } catch {
+        // ignore
+      }
+    });
+  });
+}
+
+function exchangeOnSocket(socket, config, payload, { destroySocketWhenDone = true } = {}) {
   const maxTotal = config.timeoutMs || 180000;
   const idleMs = 900;
   return new Promise((resolve, reject) => {
-    const socket = new net.Socket();
     let buffer = Buffer.alloc(0);
     let settled = false;
     let idleTimer = null;
@@ -156,10 +261,12 @@ function tcpSendAndRead(config, payload) {
     const cleanup = () => {
       if (idleTimer) clearTimeout(idleTimer);
       socket.removeAllListeners();
-      try {
-        socket.destroy();
-      } catch {
-        // ignore
+      if (destroySocketWhenDone) {
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
       }
     };
 
@@ -206,10 +313,29 @@ function tcpSendAndRead(config, payload) {
       }
     });
 
-    socket.connect(config.port, config.ip, () => {
+    const writeStart = () => {
       socket.write(payload, () => {
         bumpIdle();
       });
+    };
+
+    if (socket.connecting) {
+      socket.once('connect', writeStart);
+    } else {
+      writeStart();
+    }
+  });
+}
+
+function tcpOutboundSendAndRead(config, payload) {
+  return new Promise((resolve, reject) => {
+    const socket = new net.Socket();
+    socket.once('error', reject);
+    socket.connect(config.port, config.ip, () => {
+      socket.removeAllListeners('error');
+      exchangeOnSocket(socket, config, payload, { destroySocketWhenDone: true })
+        .then(resolve)
+        .catch(reject);
     });
   });
 }
@@ -239,12 +365,25 @@ class WorldlineServiceInstance {
           message: 'Worldline HTTP bridge URL is set (run a live payment to verify end-to-end).',
         };
       }
+      if (this.config.terminalConnectsToPos) {
+        await new Promise((resolve, reject) => {
+          const srv = net.createServer();
+          srv.once('error', reject);
+          srv.listen(this.config.listenPort, this.config.listenHost, () => {
+            srv.close(() => resolve());
+          });
+        });
+        return {
+          success: true,
+          message: `This POS can listen on ${this.config.listenHost}:${this.config.listenPort}. Configure the Worldline terminal with this computer's IP and this port.`,
+        };
+      }
       if (mode === 'unconfigured') {
         await tcpProbe(this.config.ip, this.config.port, 8000);
         return {
           success: true,
           message:
-            'TCP port reachable. Configure saleBodyTemplate + approveRegex (CTEP), or bridgeUrl / simulate for payments.',
+            'TCP port reachable on the terminal. Configure saleBodyTemplate + approveRegex (CTEP), or bridgeUrl / simulate for payments.',
         };
       }
       await tcpProbe(this.config.ip, this.config.port, 8000);
@@ -424,7 +563,35 @@ class WorldlineServiceInstance {
         currency: this.config.currencyCode,
       });
       const payload = buildWirePayload(this.config, body);
-      const raw = await tcpSendAndRead(this.config, payload);
+
+      let clientSocket;
+      if (this.config.terminalConnectsToPos) {
+        const curWait = this.sessions.get(sessionId);
+        if (curWait) {
+          curWait.message = `Listening on ${this.config.listenHost}:${this.config.listenPort} — connect from the terminal…`;
+          this.sessions.set(sessionId, curWait);
+        }
+        clientSocket = await listenForTerminalSocket(
+          this.config.listenHost,
+          this.config.listenPort,
+          this.config.timeoutMs || 180000,
+          () => {
+            const s = this.sessions.get(sessionId);
+            return !!(s && s.cancelRequested);
+          },
+          () => {
+            const s = this.sessions.get(sessionId);
+            if (s) {
+              s.message = 'Terminal connected — processing…';
+              this.sessions.set(sessionId, s);
+            }
+          },
+        );
+      }
+
+      const raw = this.config.terminalConnectsToPos
+        ? await exchangeOnSocket(clientSocket, this.config, payload, { destroySocketWhenDone: true })
+        : await tcpOutboundSendAndRead(this.config, payload);
       const cur = this.sessions.get(sessionId);
       if (!cur) return;
       if (cur.cancelRequested) {
@@ -458,9 +625,14 @@ class WorldlineServiceInstance {
         details: { rawPreview: text.slice(0, 800) },
       });
     } catch (err) {
+      const msg = err?.message || '';
+      if (msg === 'Cancelled') {
+        finish({ state: 'CANCELLED', message: 'Payment cancelled.', details: {} });
+        return;
+      }
       finish({
         state: 'ERROR',
-        message: err.message || 'Worldline TCP error',
+        message: msg || 'Worldline TCP error',
         details: { error: err.message, code: err.code },
       });
     }
@@ -503,7 +675,12 @@ class WorldlineServiceInstance {
           currency: this.config.currencyCode,
         });
         const payload = buildWirePayload(this.config, body);
-        await tcpSendAndRead({ ...this.config, timeoutMs: Math.min(this.config.timeoutMs, 30000) }, payload);
+        const shortCfg = { ...this.config, timeoutMs: Math.min(this.config.timeoutMs, 30000) };
+        if (this.config.terminalConnectsToPos) {
+          /* cancel on inbound without an active socket is best-effort */
+        } else {
+          await tcpOutboundSendAndRead(shortCfg, payload);
+        }
       } catch {
         // ignore cancel send errors
       }

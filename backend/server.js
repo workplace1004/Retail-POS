@@ -16,6 +16,13 @@ import { createPayworldService } from './services/payworldService.js';
 import { createCcvService } from './services/ccvService.js';
 import { createVivaService } from './services/vivaService.js';
 import { createWorldlineService } from './services/worldlineService.js';
+import {
+  testBancontactProConnection,
+  createBancontactProPayment,
+  getBancontactProPayment,
+  cancelBancontactProPayment,
+  mapBancontactProStatusToTerminal,
+} from './services/bancontactProService.js';
 import { buildPeriodicReportReceiptLines } from './periodicReportReceipt.js';
 import { buildPeriodicReportWebSections } from './periodicReportWebSections.js';
 import { buildFinancialReportReceiptLines } from './financialReportReceipt.js';
@@ -6442,6 +6449,10 @@ app.post('/api/payment-terminals/:id/test', async (req, res) => {
       const result = await service.testConnection();
       if (result.success) res.json({ success: true, message: result.message });
       else res.status(500).json({ success: false, error: result.message });
+    } else if (t.type === 'bancontact_pro') {
+      const result = await testBancontactProConnection(t.connectionString);
+      if (result.success) res.json({ success: true, message: result.message });
+      else res.status(500).json({ success: false, error: result.message });
     } else {
       res.json({ success: true, message: 'Terminal test not implemented for this type' });
     }
@@ -7168,6 +7179,7 @@ const PAYMENT_INTEGRATIONS = new Set([
   'manual_cash',
   'cashmatic',
   'payworld',
+  'bancontactpro',
   'ccv',
   'worldline',
   'viva',
@@ -9038,6 +9050,90 @@ app.post('/api/payworld/cancel/:sessionId', async (req, res) => {
   }
 });
 
+// ---------- Bancontact Pro QR (Payconiq v3 / Bancontact Pro integrated) ----------
+app.post('/api/bancontactpro/start', async (req, res) => {
+  try {
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ ok: false, error: 'Invalid amount for Bancontact Pro' });
+    }
+    const terminal = await prisma.paymentTerminal.findFirst({
+      where: { type: 'bancontact_pro', enabled: 1 },
+      orderBy: { isMain: 'desc' },
+    });
+    if (!terminal) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Bancontact Pro terminal not configured or not enabled (Control → External → Card → Bancontact QR).',
+      });
+    }
+    const description = req.body?.description != null ? String(req.body.description) : 'POS payment';
+    const reference = req.body?.reference != null ? String(req.body.reference) : undefined;
+    const created = await createBancontactProPayment(terminal.connectionString, {
+      amountEuro: amount,
+      description,
+      reference,
+    });
+    return res.json({
+      ok: true,
+      provider: 'bancontactpro',
+      sessionId: created.paymentId,
+      qrcodeUrl: created.qrcodeUrl || null,
+      state: 'IN_PROGRESS',
+      message: 'Scan the QR code with Bancontact Pay or your banking app.',
+      amountInCents: Math.round(amount * 100),
+    });
+  } catch (err) {
+    console.error('POST /api/bancontactpro/start', err);
+    return res.status(500).json({ ok: false, error: err.message || 'Failed to start Bancontact Pro payment' });
+  }
+});
+
+app.get('/api/bancontactpro/status/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) return res.status(400).json({ ok: false, error: 'No sessionId provided.' });
+    const terminal = await prisma.paymentTerminal.findFirst({
+      where: { type: 'bancontact_pro', enabled: 1 },
+      orderBy: { isMain: 'desc' },
+    });
+    if (!terminal) {
+      return res.status(503).json({ ok: false, error: 'Bancontact Pro terminal not configured or not enabled.' });
+    }
+    const data = await getBancontactProPayment(terminal.connectionString, sessionId);
+    const mapped = mapBancontactProStatusToTerminal(data);
+    return res.json({
+      ok: mapped.ok,
+      state: mapped.state,
+      message: mapped.message,
+      details: mapped.details,
+    });
+  } catch (err) {
+    console.error('GET /api/bancontactpro/status/:sessionId', err);
+    return res.status(500).json({ ok: false, error: err.message || 'Failed to get Bancontact Pro status' });
+  }
+});
+
+app.post('/api/bancontactpro/cancel/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    if (!sessionId) return res.status(400).json({ ok: false, error: 'No sessionId provided.' });
+    const terminal = await prisma.paymentTerminal.findFirst({
+      where: { type: 'bancontact_pro', enabled: 1 },
+      orderBy: { isMain: 'desc' },
+    });
+    if (!terminal) {
+      return res.status(503).json({ ok: false, error: 'Bancontact Pro terminal not configured or not enabled.' });
+    }
+    const result = await cancelBancontactProPayment(terminal.connectionString, sessionId);
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.message || 'Cancel failed' });
+    return res.json({ ok: true, message: result.message || 'Payment cancelled.' });
+  } catch (err) {
+    console.error('POST /api/bancontactpro/cancel/:sessionId', err);
+    return res.status(500).json({ ok: false, error: err.message || 'Failed to cancel Bancontact Pro payment' });
+  }
+});
+
 // ---------- Viva payment (session-based) ----------
 app.post('/api/viva/start', async (req, res) => {
   try {
@@ -9286,6 +9382,25 @@ app.post('/api/worldline/cancel/:sessionId', async (req, res) => {
   } catch (err) {
     console.error('POST /api/worldline/cancel/:sessionId', err);
     return res.status(500).json({ ok: false, error: err.message || 'Failed to cancel Worldline payment' });
+  }
+});
+
+/** Non-sensitive LAN IPv4s for Worldline terminal setup (terminal dials this POS). */
+app.get('/api/worldline/local-addrs', (req, res) => {
+  try {
+    const nets = os.networkInterfaces();
+    const ips = [];
+    for (const name of Object.keys(nets)) {
+      for (const n of nets[name] || []) {
+        const fam = n?.family;
+        const isV4 = fam === 'IPv4' || fam === 4;
+        if (n && isV4 && !n.internal) ips.push(n.address);
+      }
+    }
+    res.json({ ok: true, ips });
+  } catch (err) {
+    console.error('GET /api/worldline/local-addrs', err);
+    res.status(500).json({ ok: false, error: err.message || 'Failed to read network interfaces' });
   }
 });
 

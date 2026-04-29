@@ -7,6 +7,8 @@ import { ControlViewCategoriesProductsContent } from './ControlViewCategoriesPro
 import { ControlViewExternalSimpleDevices } from './ControlViewExternalSimpleDevices';
 import { ControlViewCashmatic } from './ControlViewCashmatic';
 import { ControlViewPayworld } from './ControlViewPayworld';
+import { ControlViewBancontactPro } from './ControlViewBancontactPro';
+import { ControlViewWorldline } from './ControlViewWorldline';
 import { ControlViewCcv } from './ControlViewCcv';
 import { ControlViewExternalPrinter } from './ControlViewExternalPrinter';
 import { TopNavIcon, ReportTabIcon } from './controlViewNavIcons';
@@ -145,6 +147,7 @@ export function ControlViewMainContentArea({ ctx }) {
     handleSaveCcv,
     handleSaveViva,
     handleSaveWorldline,
+    handleSaveBancontactPro,
     handleSavePriceDisplay,
     handleSaveProductionTickets,
     handleSaveReportSettings,
@@ -201,6 +204,8 @@ export function ControlViewMainContentArea({ ctx }) {
     worldlineName,
     worldlineIpAddress,
     worldlinePort,
+    worldlineTerminalConnectsToPos,
+    setWorldlineTerminalConnectsToPos,
     worldlineSimulate,
     setWorldlineSimulate,
     worldlineKeyboardOnChange,
@@ -212,6 +217,17 @@ export function ControlViewMainContentArea({ ctx }) {
     ccvWorkstationId,
     ccvKeyboardOnChange,
     ccvKeyboardValue,
+    bancontactProName,
+    setBancontactProName,
+    bancontactProApiKey,
+    setBancontactProApiKey,
+    bancontactProSandbox,
+    setBancontactProSandbox,
+    bancontactProCallbackUrl,
+    setBancontactProCallbackUrl,
+    setBancontactProActiveField,
+    bancontactProKeyboardOnChange,
+    bancontactProKeyboardValue,
     periodicReportEndDate,
     periodicReportEndTime,
     periodicReportLines,
@@ -261,6 +277,7 @@ export function ControlViewMainContentArea({ ctx }) {
     savingCcv,
     savingViva,
     savingWorldline,
+    savingBancontactPro,
     savingPriceDisplay,
     savingProdTickets,
     savingReportSettings,
@@ -2719,6 +2736,17 @@ export function ControlViewMainContentArea({ ctx }) {
                     >
                       {tr('control.external.creditCardType.worldline', 'Worldline')}
                     </button>
+                    <button
+                      type="button"
+                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                        cardTerminalProvider === 'bancontactpro'
+                          ? 'bg-pos-bg text-pos-text'
+                          : 'text-pos-muted active:text-pos-text'
+                      }`}
+                      onClick={() => setCardTerminalProvider('bancontactpro')}
+                    >
+                      {tr('control.external.creditCardType.bancontactpro', 'Bancontact QR')}
+                    </button>
                   </div>
                 </div>
                 {cardTerminalProvider === 'ccv' ? (
@@ -2742,9 +2770,6 @@ export function ControlViewMainContentArea({ ctx }) {
                   />
                 ) : cardTerminalProvider === 'viva' ? (
                   <div className="w-full">
-                    <div className="text-center text-sm font-semibold text-pos-muted mb-2">
-                      {tr('control.external.vivaSettingsTitle', 'Viva Terminal Settings')}
-                    </div>
                     <ControlViewPayworld
                       tr={tr}
                       payworldName={vivaName}
@@ -2760,36 +2785,44 @@ export function ControlViewMainContentArea({ ctx }) {
                       payworldKeyboardOnChange={vivaKeyboardOnChange}
                     />
                   </div>
+                ) : cardTerminalProvider === 'bancontactpro' ? (
+                  <div className="w-full">
+                    <ControlViewBancontactPro
+                      tr={tr}
+                      bancontactProName={bancontactProName}
+                      setBancontactProName={setBancontactProName}
+                      setBancontactProActiveField={setBancontactProActiveField}
+                      bancontactProApiKey={bancontactProApiKey}
+                      setBancontactProApiKey={setBancontactProApiKey}
+                      bancontactProSandbox={bancontactProSandbox}
+                      setBancontactProSandbox={setBancontactProSandbox}
+                      bancontactProCallbackUrl={bancontactProCallbackUrl}
+                      setBancontactProCallbackUrl={setBancontactProCallbackUrl}
+                      savingBancontactPro={savingBancontactPro}
+                      handleSaveBancontactPro={handleSaveBancontactPro}
+                      bancontactProKeyboardValue={bancontactProKeyboardValue}
+                      bancontactProKeyboardOnChange={bancontactProKeyboardOnChange}
+                    />
+                  </div>
                 ) : cardTerminalProvider === 'worldline' ? (
                   <div className="w-full">
-                    <div className="text-center text-sm font-semibold text-pos-muted mb-2">
-                      {tr('control.external.worldlineSettingsTitle', 'Worldline RX5000 (CTEP over IP)')}
-                    </div>
-                    <ControlViewPayworld
+                    <ControlViewWorldline
                       tr={tr}
-                      labelKeyPrefix="control.worldline"
-                      extraBottom={(
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            className="h-5 w-5 rounded border-pos-border"
-                            checked={!!worldlineSimulate}
-                            onChange={(e) => setWorldlineSimulate(e.target.checked)}
-                          />
-                          <span>{tr('control.worldline.simulate', 'Test mode (simulate payment, no CTEP on wire)')}</span>
-                        </label>
-                      )}
-                      payworldName={worldlineName}
-                      setPayworldName={setWorldlineName}
-                      setPayworldActiveField={setWorldlineActiveField}
-                      payworldIpAddress={worldlineIpAddress}
-                      setPayworldIpAddress={setWorldlineIpAddress}
-                      payworldPort={worldlinePort}
-                      setPayworldPort={setWorldlinePort}
-                      savingPayworld={savingWorldline}
-                      handleSavePayworld={handleSaveWorldline}
-                      payworldKeyboardValue={worldlineKeyboardValue}
-                      payworldKeyboardOnChange={worldlineKeyboardOnChange}
+                      worldlineName={worldlineName}
+                      setWorldlineName={setWorldlineName}
+                      setWorldlineActiveField={setWorldlineActiveField}
+                      worldlineTerminalConnectsToPos={worldlineTerminalConnectsToPos}
+                      setWorldlineTerminalConnectsToPos={setWorldlineTerminalConnectsToPos}
+                      worldlineIpAddress={worldlineIpAddress}
+                      setWorldlineIpAddress={setWorldlineIpAddress}
+                      worldlinePort={worldlinePort}
+                      setWorldlinePort={setWorldlinePort}
+                      worldlineSimulate={worldlineSimulate}
+                      setWorldlineSimulate={setWorldlineSimulate}
+                      savingWorldline={savingWorldline}
+                      handleSaveWorldline={handleSaveWorldline}
+                      worldlineKeyboardValue={worldlineKeyboardValue}
+                      worldlineKeyboardOnChange={worldlineKeyboardOnChange}
                     />
                   </div>
                 ) : (
