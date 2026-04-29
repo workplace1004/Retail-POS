@@ -3,6 +3,7 @@ import { format, parseISO } from "date-fns";
 import { Printer, Download, FileText, Bell, Coins, X } from "lucide-react";
 import type { TranslationKey } from "@/lib/translations";
 import { apiRequest } from "@/lib/api";
+import { INVOICING_PREVIEW_PRINT_AREA_ID } from "@/lib/invoicingPreviewPdf";
 
 export type SavedInvoicingDocumentDTO = {
   id: string;
@@ -46,6 +47,8 @@ type Props = {
   docKindLabel: string;
   t: (key: TranslationKey) => string;
   onClose: () => void;
+  onPrint: () => void;
+  onDownloadPdf: () => void;
   onToolbarStub: () => void;
 };
 
@@ -103,7 +106,7 @@ function vatRowsFromItems(
     .sort((a, b) => a.rate - b.rate);
 }
 
-export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, onClose, onToolbarStub }: Props) {
+export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, onClose, onPrint, onDownloadPdf, onToolbarStub }: Props) {
   const snapshotEmail = emailFromCustomerSnapshot(document.customer);
 
   /** Snapshot email, or fetched from `/api/customers/:id` when snapshot omits email (older saves). */
@@ -164,16 +167,16 @@ export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, on
   const vatRows = vatRowsFromItems(document.items);
 
   return (
-    <div className="flex flex-col bg-background text-foreground max-h-[90vh]">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 bg-muted/30">
+    <div data-invoicing-print-content className="flex flex-col bg-background text-foreground max-h-[90vh]">
+      <div data-invoicing-print-skip className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 bg-muted/30">
         <div className="flex flex-1 items-center justify-center gap-2 sm:gap-3">
-          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Print" onClick={onToolbarStub}>
+          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Print" onClick={onPrint}>
             <Printer className="h-5 w-5" />
           </button>
           <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Download" onClick={onToolbarStub}>
             <Download className="h-5 w-5" />
           </button>
-          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="PDF" onClick={onToolbarStub}>
+          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="PDF" onClick={onDownloadPdf}>
             <FileText className="h-5 w-5" />
           </button>
           <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Notify" onClick={onToolbarStub}>
@@ -187,13 +190,13 @@ export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, on
           <X className="h-7 w-7" />
         </button>
       </div>
-      <p className="text-center text-sm text-muted-foreground py-2 border-b border-border">
+      <p data-invoicing-print-skip className="text-center text-sm text-muted-foreground py-2 border-b border-border">
         {t("invoicingPreviewMailPrefix")}
         {mailTo}
       </p>
 
-      <div className="overflow-y-auto flex-1 p-4 sm:p-6">
-        <div className="mx-auto max-w-[720px] bg-white text-black shadow-sm border border-neutral-200 rounded-sm p-6 sm:p-8 min-h-[480px]">
+      <div data-invoicing-print-scroll className="overflow-y-auto flex-1 p-4 sm:p-6">
+        <div id={INVOICING_PREVIEW_PRINT_AREA_ID} className="mx-auto max-w-[720px] bg-white text-black shadow-sm border border-neutral-200 rounded-sm p-6 sm:p-8 min-h-[480px]">
           <div className="flex flex-wrap justify-between gap-8 border-b border-neutral-200 pb-4 mb-4 items-start">
             {/* Sender: logo + company info (document layout settings) */}
             <div className="flex flex-col gap-2 max-w-[min(100%,320px)]">

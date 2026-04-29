@@ -23,6 +23,7 @@ import {
 } from "@/components/invoicing/InvoicingDocumentPreview";
 import { DataPagination } from "@/components/DataPagination";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { downloadInvoicingPreviewPdf } from "@/lib/invoicingPreviewPdf";
 
 type InvoicingDocumentListRow = {
   id: string;
@@ -84,6 +85,20 @@ const DEFAULT_DOCUMENT_LAYOUT_OPTIONS: InvoicingDocumentLayoutOptions = {
   showTotalExcl: false,
   showVatPercent: false,
 };
+
+const INVOICING_PREVIEW_PRINT_BODY_CLASS = "print-invoicing-preview-only";
+
+function printInvoicingPreviewMain() {
+  const body = document.body;
+  if (!body) return;
+  body.classList.add(INVOICING_PREVIEW_PRINT_BODY_CLASS);
+  const removeClass = () => {
+    body.classList.remove(INVOICING_PREVIEW_PRINT_BODY_CLASS);
+    window.removeEventListener("afterprint", removeClass);
+  };
+  window.addEventListener("afterprint", removeClass);
+  window.print();
+}
 
 /** Module-level so React keeps the same component type across parent re-renders (avoids input focus loss). */
 function FormRow({ label, children }: { label: string; children: ReactNode }) {
@@ -287,6 +302,19 @@ const Invoicing = () => {
     setDocPreviewLayout(null);
     setDocPreviewLoading(false);
   }, []);
+
+  const downloadInvoicingPreview = useCallback(async () => {
+    if (!docPreview) return;
+    try {
+      await downloadInvoicingPreviewPdf(`invoice-${docPreview.displayNumber || docPreview.id}`);
+      toast({ description: t("reportPdfDownloaded") });
+    } catch (e) {
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : t("reportPdfFailed"),
+      });
+    }
+  }, [docPreview, t]);
 
   const openDocumentPreview = useCallback(
     async (docId: string) => {
@@ -994,7 +1022,7 @@ const Invoicing = () => {
       />
 
       <Dialog open={docPreviewOpen} onOpenChange={(o) => { if (!o) closeDocPreview(); }}>
-        <DialogContent hideClose className="max-h-[92vh] max-w-3xl gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        <DialogContent data-invoicing-print-content hideClose className="max-h-[92vh] max-w-3xl gap-0 overflow-hidden p-0 sm:max-w-3xl">
           <DialogTitle className="sr-only">{t("invoicingPreviewSrTitle")}</DialogTitle>
           {docPreviewLoading ? (
             <div className="flex justify-center py-24 text-muted-foreground">
@@ -1007,6 +1035,8 @@ const Invoicing = () => {
               docKindLabel={invoicingDocKindLabel(docPreview.kind, t)}
               t={t}
               onClose={closeDocPreview}
+              onPrint={() => printInvoicingPreviewMain()}
+              onDownloadPdf={() => void downloadInvoicingPreview()}
               onToolbarStub={() => toast({ description: t("invoicingToolbarNotYet") })}
             />
           ) : null}

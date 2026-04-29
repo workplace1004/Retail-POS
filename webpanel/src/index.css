@@ -979,3 +979,66 @@
     margin-top: 2mm;
   }
 }
+
+/* Invoicing preview modal: print only #invoicing-preview-print-area */
+@media print {
+  html:has(body.print-invoicing-preview-only) {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-invoicing-preview-only {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.print-invoicing-preview-only > * {
+    display: none !important;
+  }
+  body.print-invoicing-preview-only [data-invoicing-print-content] {
+    display: block !important;
+  }
+  body.print-invoicing-preview-only * {
+    visibility: hidden;
+  }
+  body.print-invoicing-preview-only [data-invoicing-print-content],
+  body.print-invoicing-preview-only [data-invoicing-print-content] *,
+  body.print-invoicing-preview-only #invoicing-preview-print-area,
+  body.print-invoicing-preview-only #invoicing-preview-print-area * {
+    visibility: visible;
+  }
+  body.print-invoicing-preview-only [data-invoicing-print-content] {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+  body.print-invoicing-preview-only [data-invoicing-print-scroll] {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+  body.print-invoicing-preview-only [data-invoicing-print-skip] {
+    display: none !important;
+    visibility: hidden !important;
+  }
+  body.print-invoicing-preview-only #invoicing-preview-print-area {
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 8mm !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+  }
+}
