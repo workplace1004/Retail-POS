@@ -910,6 +910,11 @@ export function ControlView({
 
   const [worldlineName, setWorldlineName] = useState('Worldline RX5000');
   const [worldlinePort, setWorldlinePort] = useState('9001');
+  const [worldlineSaleBodyTemplate, setWorldlineSaleBodyTemplate] = useState('');
+  const [worldlineApproveRegex, setWorldlineApproveRegex] = useState('approved|accept|ok|autoris|transaction ok');
+  const [worldlineDeclineRegex, setWorldlineDeclineRegex] = useState('declin|refus|refused|error|annul');
+  const [worldlineRawTcp, setWorldlineRawTcp] = useState(false);
+  const [worldlineAppendLrc, setWorldlineAppendLrc] = useState(true);
   const [worldlineActiveField, setWorldlineActiveField] = useState('name');
   const [savingWorldline, setSavingWorldline] = useState(false);
   const [worldlineTerminalId, setWorldlineTerminalId] = useState(null);
@@ -4847,6 +4852,11 @@ export function ControlView({
         const s = JSON.parse(raw);
         if (s.name != null) setWorldlineName(String(s.name));
         if (s.port != null) setWorldlinePort(String(s.port));
+        if (s.saleBodyTemplate != null) setWorldlineSaleBodyTemplate(String(s.saleBodyTemplate));
+        if (s.approveRegex != null) setWorldlineApproveRegex(String(s.approveRegex));
+        if (s.declineRegex != null) setWorldlineDeclineRegex(String(s.declineRegex));
+        if (s.rawTcp != null) setWorldlineRawTcp(!!s.rawTcp);
+        if (s.appendLrc != null) setWorldlineAppendLrc(!!s.appendLrc);
       }
     } catch (_) { }
     const loadWorldlineFromDb = async () => {
@@ -4864,6 +4874,22 @@ export function ControlView({
         setWorldlineTerminalId(wl.id || null);
         if (wl.name != null) setWorldlineName(String(wl.name));
         if (parsed.port != null) setWorldlinePort(String(parsed.port));
+        const tpl = parsed.saleBodyTemplate ?? parsed.ctepSaleBody ?? parsed.sale_body_template;
+        setWorldlineSaleBodyTemplate(tpl != null ? String(tpl) : '');
+        const ar = parsed.approveRegex ?? parsed.approve_regex;
+        if (ar != null && String(ar).trim() !== '') setWorldlineApproveRegex(String(ar));
+        else setWorldlineApproveRegex('approved|accept|ok|autoris|transaction ok');
+        const dr = parsed.declineRegex ?? parsed.decline_regex;
+        if (dr != null && String(dr).trim() !== '') setWorldlineDeclineRegex(String(dr));
+        else setWorldlineDeclineRegex('declin|refus|refused|error|annul');
+        const rawTcp =
+          parsed.noStxEtx === true
+          || parsed.rawTcp === true
+          || String(parsed.noStxEtx || '').toLowerCase() === 'true'
+          || String(parsed.rawTcp || '').toLowerCase() === 'true';
+        setWorldlineRawTcp(!!rawTcp);
+        const lrcOff = parsed.appendLrc === false || parsed.append_lrc === false;
+        setWorldlineAppendLrc(!lrcOff);
       } catch {
         // Keep local values if backend is unavailable.
       }
@@ -5402,6 +5428,34 @@ export function ControlView({
         port: resolvedPort,
       };
       delete connectionConfig.ip;
+
+      const tplTrim = String(worldlineSaleBodyTemplate || '').trim();
+      if (tplTrim) {
+        connectionConfig.saleBodyTemplate = tplTrim;
+      } else {
+        delete connectionConfig.saleBodyTemplate;
+        delete connectionConfig.ctepSaleBody;
+        delete connectionConfig.sale_body_template;
+      }
+
+      const arTrim = String(worldlineApproveRegex || '').trim();
+      if (arTrim) connectionConfig.approveRegex = arTrim;
+      else delete connectionConfig.approveRegex;
+
+      const drTrim = String(worldlineDeclineRegex || '').trim();
+      if (drTrim) connectionConfig.declineRegex = drTrim;
+      else delete connectionConfig.declineRegex;
+
+      if (worldlineRawTcp) {
+        connectionConfig.noStxEtx = true;
+        delete connectionConfig.wrapStxEtx;
+      } else {
+        delete connectionConfig.noStxEtx;
+        delete connectionConfig.rawTcp;
+      }
+
+      if (!worldlineAppendLrc) connectionConfig.appendLrc = false;
+      else delete connectionConfig.appendLrc;
       const terminalPayload = {
         name: String(worldlineName || '').trim() || 'Worldline Terminal',
         type: 'worldline',
@@ -5434,6 +5488,11 @@ export function ControlView({
         localStorage.setItem('pos_worldline', JSON.stringify({
           name: terminalPayload.name,
           port: connectionConfig.port,
+          ...(tplTrim ? { saleBodyTemplate: tplTrim } : {}),
+          ...(arTrim ? { approveRegex: arTrim } : {}),
+          ...(drTrim ? { declineRegex: drTrim } : {}),
+          rawTcp: !!worldlineRawTcp,
+          appendLrc: !!worldlineAppendLrc,
         }));
       }
       showToast('success', 'Worldline settings saved.');
@@ -5545,11 +5604,17 @@ export function ControlView({
   const worldlineKeyboardValue =
     worldlineActiveField === 'name' ? worldlineName
       : worldlineActiveField === 'port' ? worldlinePort
-        : '';
+        : worldlineActiveField === 'template' ? worldlineSaleBodyTemplate
+          : worldlineActiveField === 'approveRegex' ? worldlineApproveRegex
+            : worldlineActiveField === 'declineRegex' ? worldlineDeclineRegex
+              : '';
 
   const worldlineKeyboardOnChange = (v) => {
     if (worldlineActiveField === 'name') setWorldlineName(v);
     else if (worldlineActiveField === 'port') setWorldlinePort(v);
+    else if (worldlineActiveField === 'template') setWorldlineSaleBodyTemplate(v);
+    else if (worldlineActiveField === 'approveRegex') setWorldlineApproveRegex(v);
+    else if (worldlineActiveField === 'declineRegex') setWorldlineDeclineRegex(v);
   };
 
   const bancontactProKeyboardValue =
@@ -6544,6 +6609,16 @@ export function ControlView({
           vivaKeyboardValue,
           worldlineName,
           worldlinePort,
+          worldlineSaleBodyTemplate,
+          setWorldlineSaleBodyTemplate,
+          worldlineApproveRegex,
+          setWorldlineApproveRegex,
+          worldlineDeclineRegex,
+          setWorldlineDeclineRegex,
+          worldlineRawTcp,
+          setWorldlineRawTcp,
+          worldlineAppendLrc,
+          setWorldlineAppendLrc,
           worldlineKeyboardOnChange,
           worldlineKeyboardValue,
           ccvName,
@@ -6686,6 +6761,11 @@ export function ControlView({
           setWorldlineActiveField,
           setWorldlineName,
           setWorldlinePort,
+          setWorldlineSaleBodyTemplate,
+          setWorldlineApproveRegex,
+          setWorldlineDeclineRegex,
+          setWorldlineRawTcp,
+          setWorldlineAppendLrc,
           setCcvActiveField,
           setCcvName,
           setCcvIpAddress,
