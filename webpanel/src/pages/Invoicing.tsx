@@ -23,7 +23,7 @@ import {
 } from "@/components/invoicing/InvoicingDocumentPreview";
 import { DataPagination } from "@/components/DataPagination";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { downloadInvoicingPreviewPdf } from "@/lib/invoicingPreviewPdf";
+import { buildInvoicingPreviewPdfBase64, downloadInvoicingPreviewPdf } from "@/lib/invoicingPreviewPdf";
 
 type InvoicingDocumentListRow = {
   id: string;
@@ -163,10 +163,13 @@ const Invoicing = () => {
   const [paymentModalDoc, setPaymentModalDoc] = useState<InvoicingDocumentListRow | null>(null);
   const [paymentReceivedStr, setPaymentReceivedStr] = useState("0.00");
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [reopenPreviewDocId, setReopenPreviewDocId] = useState<string | null>(null);
+  const shouldReopenPreviewAfterPaymentRef = useRef(false);
   const [docPreviewOpen, setDocPreviewOpen] = useState(false);
   const [docPreviewLoading, setDocPreviewLoading] = useState(false);
   const [docPreview, setDocPreview] = useState<SavedInvoicingDocumentDTO | null>(null);
   const [docPreviewLayout, setDocPreviewLayout] = useState<InvoicingPreviewLayout | null>(null);
+  const [sendInvoiceLoading, setSendInvoiceLoading] = useState(false);
   const [perPage, setPerPage] = useState(1);
   const [perPageSize, setPerPageSize] = useState(10);
   const [docLayoutOptions, setDocLayoutOptions] = useState<InvoicingDocumentLayoutOptions>(DEFAULT_DOCUMENT_LAYOUT_OPTIONS);
@@ -263,13 +266,25 @@ const Invoicing = () => {
       setPaymentModalDoc(null);
       setPaymentReceivedStr("0.00");
       setPaymentSaving(false);
+      if (!shouldReopenPreviewAfterPaymentRef.current) {
+        setReopenPreviewDocId(null);
+      }
     }
   }, []);
 
   const handleLoadFullDue = useCallback(() => {
     if (!paymentModalDoc) return;
     const due = Math.max(0, Number(paymentModalDoc.dueAmount) || 0);
-    setPaymentReceivedStr(due.toFixed(2));
+    const total = Math.max(0, Number(paymentModalDoc.totalIncl) || 0);
+    const alreadyPaid = Math.max(0, Number(paymentModalDoc.alreadyPaid) || 0);
+    const remainingFromTotal = Math.max(0, total - alreadyPaid);
+    const target =
+      due > 0.0005
+        ? due
+        : remainingFromTotal > 0.0005
+          ? remainingFromTotal
+          : total;
+    setPaymentReceivedStr(target.toFixed(2));
   }, [paymentModalDoc]);
 
   const handleSavePayment = useCallback(async () => {
@@ -279,6 +294,11 @@ const Invoicing = () => {
       toast({ variant: "destructive", description: t("invoicingPaymentInvalidAmount") });
       return;
     }
+    const total = Math.max(0, Number(paymentModalDoc.totalIncl) || 0);
+    if (received > total + 0.0005) {
+      toast({ variant: "destructive", description: t("invoicingPaymentExceedsTotal") });
+      return;
+    }
     setPaymentSaving(true);
     try {
       await apiRequest(`/api/webpanel/invoicing/documents/${encodeURIComponent(paymentModalDoc.id)}/payment`, {
@@ -286,6 +306,7 @@ const Invoicing = () => {
         body: JSON.stringify({ received }),
       });
       toast({ description: t("invoicingPaymentSaved") });
+      shouldReopenPreviewAfterPaymentRef.current = true;
       setPaymentModalDoc(null);
       setPaymentReceivedStr("0.00");
       await loadDocuments();
@@ -301,6 +322,7 @@ const Invoicing = () => {
     setDocPreview(null);
     setDocPreviewLayout(null);
     setDocPreviewLoading(false);
+    setSendInvoiceLoading(false);
   }, []);
 
   const downloadInvoicingPreview = useCallback(async () => {
@@ -316,9 +338,43 @@ const Invoicing = () => {
     }
   }, [docPreview, t]);
 
+  const sendInvoicingPreview = useCallback(async () => {
+    if (!docPreview) return;
+    setSendInvoiceLoading(true);
+    const docId = docPreview.id;
+    const displayNr = docPreview.displayNumber;
+    console.log("[invoicing/send] start", { documentId: docId, displayNumber: displayNr });
+    try {
+      // Use a lighter PDF for e-mail to avoid Resend upstream timeouts on large uploads.
+      const pdfBase64 = await buildInvoicingPreviewPdfBase64(1.1);
+      const fileName = `invoice-${docPreview.displayNumber || docPreview.id}.pdf`;
+      const pdfBytesApprox = Math.floor((pdfBase64.length * 3) / 4);
+      console.log("[invoicing/send] PDF ready", { documentId: docId, fileName, pdfBytesApprox });
+      const res = await apiRequest<{ ok?: boolean; to?: string; messageId?: string | null }>(
+        `/api/webpanel/invoicing/documents/${encodeURIComponent(docPreview.id)}/send`,
+        {
+          method: "POST",
+          body: JSON.stringify({ pdfBase64, fileName }),
+        },
+      );
+      console.log("[invoicing/send] API success", { documentId: docId, response: res });
+      toast({ description: "Invoice email sent." });
+    } catch (e) {
+      console.error("[invoicing/send] failed", { documentId: docId, error: e });
+      toast({
+        variant: "destructive",
+        description: e instanceof Error ? e.message : "Failed to send invoice email.",
+      });
+    } finally {
+      setSendInvoiceLoading(false);
+      console.log("[invoicing/send] finished", { documentId: docId });
+    }
+  }, [docPreview]);
+
   const openDocumentPreview = useCallback(
     async (docId: string) => {
       setDocPreviewLoading(true);
+      setSendInvoiceLoading(false);
       setDocPreviewOpen(true);
       setDocPreview(null);
       setDocPreviewLayout(null);
@@ -353,6 +409,19 @@ const Invoicing = () => {
     },
     [t, closeDocPreview],
   );
+
+  useEffect(() => {
+    if (paymentModalDoc != null) return;
+    if (!shouldReopenPreviewAfterPaymentRef.current) return;
+    const docId = reopenPreviewDocId?.trim();
+    if (!docId) {
+      shouldReopenPreviewAfterPaymentRef.current = false;
+      return;
+    }
+    shouldReopenPreviewAfterPaymentRef.current = false;
+    setReopenPreviewDocId(null);
+    void openDocumentPreview(docId);
+  }, [paymentModalDoc, reopenPreviewDocId, openDocumentPreview]);
 
   const settingsNav: { id: typeof settingsTab; label: TranslationKey }[] = [
     { id: "layouts", label: "manageLayouts" },
@@ -558,6 +627,7 @@ const Invoicing = () => {
                     const d = new Date(r.documentDate);
                     const dateStr = Number.isFinite(d.getTime()) ? format(d, "dd-MM-yyyy") : "—";
                     const totalStr = (Number(r.totalIncl) || 0).toFixed(2);
+                    const paidStr = (Number(r.alreadyPaid) || 0).toFixed(2);
                     const settled = (Number(r.dueAmount) || 0) <= 0.005;
                     return (
                       <div
@@ -572,7 +642,11 @@ const Invoicing = () => {
                         <div className="text-right font-mono">{totalStr}</div>
                         <div className="flex justify-center text-muted-foreground" />
                         <div className="flex justify-center">
-                          {settled ? <Check className="h-4 w-4 text-primary" aria-label={t("paid")} /> : null}
+                          {settled ? (
+                            <Check className="h-4 w-4 text-primary" aria-label={t("paid")} />
+                          ) : (
+                            <span className="font-mono tabular-nums">{paidStr}</span>
+                          )}
                         </div>
                         <div className="flex justify-center">
                           <Button
@@ -594,7 +668,7 @@ const Invoicing = () => {
                             aria-label={t("invoicingRecordPaymentSr")}
                             onClick={() => {
                               setPaymentModalDoc(r);
-                              setPaymentReceivedStr("0.00");
+                              setPaymentReceivedStr((Number(r.alreadyPaid) || 0).toFixed(2));
                             }}
                           >
                             <Coins className="h-4 w-4" />
@@ -1032,12 +1106,28 @@ const Invoicing = () => {
             <InvoicingDocumentPreview
               document={docPreview}
               layout={docPreviewLayout}
-              docKindLabel={invoicingDocKindLabel(docPreview.kind, t)}
               t={t}
               onClose={closeDocPreview}
               onPrint={() => printInvoicingPreviewMain()}
               onDownloadPdf={() => void downloadInvoicingPreview()}
-              onToolbarStub={() => toast({ description: t("invoicingToolbarNotYet") })}
+              onPayments={() => {
+                const alreadyPaid = Number(docPreview.alreadyPaid) || 0;
+                setReopenPreviewDocId(docPreview.id);
+                closeDocPreview();
+                setPaymentModalDoc({
+                  id: docPreview.id,
+                  displayNumber: Number(docPreview.displayNumber) || 0,
+                  kind: String(docPreview.kind || "invoice"),
+                  documentDate: String(docPreview.documentDate || ""),
+                  totalIncl: Number(docPreview.totalIncl) || 0,
+                  dueAmount: Number(docPreview.dueAmount) || 0,
+                  alreadyPaid,
+                  customerName: String((docPreview.customer as Record<string, unknown> | null)?.name ?? "—"),
+                });
+                setPaymentReceivedStr(alreadyPaid.toFixed(2));
+              }}
+              sendLoading={sendInvoiceLoading}
+              onSend={() => void sendInvoicingPreview()}
             />
           ) : null}
         </DialogContent>

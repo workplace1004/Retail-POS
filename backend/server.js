@@ -1,4 +1,6 @@
+import 'dotenv/config';
 import express from 'express';
+import axios from 'axios';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
@@ -1626,6 +1628,34 @@ function invoicingDocumentDateRange(year, monthRaw) {
   return { gte: start(0, 1), lt: new Date(y + 1, 0, 1, 12, 0, 0, 0) };
 }
 
+function safeInvoicingAttachmentName(raw) {
+  const cleaned = String(raw || '')
+    .trim()
+    .replace(/\.pdf$/i, '')
+    .replace(/[^\w\-]+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 120);
+  return `${cleaned || 'invoicing-document'}.pdf`;
+}
+
+function normalizeBase64Attachment(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const payload = s.includes(',') ? s.slice(s.indexOf(',') + 1) : s;
+  return payload.replace(/\s/g, '');
+}
+
+function resolveInvoicingCustomerEmail(docRow) {
+  const fromSnapshot = parseInvoicingDocumentJson(docRow.customerJson, null);
+  const snapEmail = String(fromSnapshot?.email ?? '').trim();
+  if (isValidWebpanelEmail(snapEmail)) return snapEmail;
+  return '';
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 app.get('/api/webpanel/invoicing/documents', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
   if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1744,8 +1774,7 @@ app.patch('/api/webpanel/invoicing/documents/:id/payment', async (req, res) => {
       const doc = await tx.invoicingDocument.findUnique({ where: { id } });
       if (!doc) return null;
       const totalIncl = Math.round(Math.max(0, Number(doc.totalIncl) || 0) * 100) / 100;
-      const prevPaid = Math.round(Math.max(0, Number(doc.alreadyPaid) || 0) * 100) / 100;
-      const nextPaid = Math.min(totalIncl, Math.round((prevPaid + received) * 100) / 100);
+      const nextPaid = Math.min(totalIncl, Math.round(received * 100) / 100);
       const nextDue = Math.max(0, Math.round((totalIncl - nextPaid) * 100) / 100);
       return tx.invoicingDocument.update({
         where: { id },
@@ -1757,6 +1786,159 @@ app.patch('/api/webpanel/invoicing/documents/:id/payment', async (req, res) => {
   } catch (err) {
     console.error('PATCH /api/webpanel/invoicing/documents/:id/payment', err);
     return res.status(500).json({ error: err.message || 'Failed to update payment' });
+  }
+});
+
+app.post('/api/webpanel/invoicing/documents/:id/send', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  const id = String(req.params.id ?? '').trim();
+  console.log('[invoicing/send] incoming', { documentId: id, authorized: Boolean(actorId) });
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  if (!id) return res.status(400).json({ error: 'id is required' });
+
+  const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const fromEmail = String(process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
+  if (!resendApiKey) {
+    console.warn('[invoicing/send] RESEND_API_KEY missing');
+    return res.status(500).json({ error: 'RESEND_API_KEY is not configured on server.' });
+  }
+  if (!isValidWebpanelEmail(fromEmail)) {
+    console.warn('[invoicing/send] RESEND_FROM_EMAIL invalid', { fromEmail });
+    return res.status(500).json({ error: 'RESEND_FROM_EMAIL is invalid.' });
+  }
+
+  const pdfBase64 = normalizeBase64Attachment(req.body?.pdfBase64);
+  if (!pdfBase64 || pdfBase64.length < 80) {
+    console.warn('[invoicing/send] bad PDF payload', { documentId: id, base64Length: pdfBase64?.length ?? 0 });
+    return res.status(400).json({ error: 'Valid PDF payload is required.' });
+  }
+  const fileName = safeInvoicingAttachmentName(req.body?.fileName);
+  const pdfBytesApprox = Math.floor((pdfBase64.length * 3) / 4);
+  try {
+    const doc = await prisma.invoicingDocument.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        displayNumber: true,
+        customerId: true,
+        customerJson: true,
+      },
+    });
+    if (!doc) {
+      console.warn('[invoicing/send] document not found', { documentId: id });
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    let customerEmail = resolveInvoicingCustomerEmail(doc);
+    if (!customerEmail && doc.customerId) {
+      const customer = await prisma.customer.findUnique({
+        where: { id: doc.customerId },
+        select: { email: true },
+      });
+      const rowEmail = String(customer?.email ?? '').trim();
+      if (isValidWebpanelEmail(rowEmail)) customerEmail = rowEmail;
+    }
+    if (!customerEmail) {
+      console.warn('[invoicing/send] no customer email', { documentId: id, customerId: doc.customerId });
+      return res.status(400).json({ error: 'Customer email is missing for this document.' });
+    }
+
+    console.log('[invoicing/send] sending via Resend', {
+      documentId: id,
+      displayNumber: doc.displayNumber,
+      to: customerEmail,
+      from: fromEmail,
+      attachment: fileName,
+      pdfBytesApprox,
+    });
+
+    const subject = `Invoice ${doc.displayNumber || doc.id}`;
+    // Retry transient upstream/network failures (ECONNRESET, upstream 408/5xx) for large attachments.
+    let resendResponse = null;
+    let lastAxiosErr = null;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        resendResponse = await axios.post(
+          'https://api.resend.com/emails',
+          {
+            from: fromEmail,
+            to: [customerEmail],
+            subject,
+            html: `<p>Please find your invoice attached.</p><p>Invoice: <strong>${doc.displayNumber || doc.id}</strong></p>`,
+            attachments: [
+              {
+                filename: fileName,
+                content: pdfBase64,
+                content_type: 'application/pdf',
+              },
+            ],
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${resendApiKey}`,
+              'Content-Type': 'application/json',
+              Connection: 'close',
+            },
+            timeout: 180000,
+            maxBodyLength: 50 * 1024 * 1024,
+            maxContentLength: 50 * 1024 * 1024,
+          },
+        );
+        break;
+      } catch (attemptErr) {
+        if (!axios.isAxiosError(attemptErr)) throw attemptErr;
+        lastAxiosErr = attemptErr;
+        const status = Number(attemptErr.response?.status) || 0;
+        const retriableStatus = status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
+        const retriableCode =
+          attemptErr.code === 'ECONNRESET' ||
+          attemptErr.code === 'ECONNABORTED' ||
+          attemptErr.code === 'ETIMEDOUT' ||
+          attemptErr.code === 'EAI_AGAIN';
+        const shouldRetry = attempt < maxAttempts && (retriableStatus || retriableCode);
+        console.warn('[invoicing/send] resend attempt failed', {
+          attempt,
+          maxAttempts,
+          status,
+          code: attemptErr.code,
+          message: attemptErr.message,
+          willRetry: shouldRetry,
+        });
+        if (!shouldRetry) throw attemptErr;
+        await wait(750 * attempt);
+      }
+    }
+    if (!resendResponse && lastAxiosErr) throw lastAxiosErr;
+
+    console.log('[invoicing/send] Resend OK', {
+      documentId: id,
+      to: customerEmail,
+      resendEmailId: resendResponse?.data?.id ?? null,
+    });
+    return res.json({ ok: true, to: customerEmail, messageId: resendResponse?.data?.id ?? null });
+  } catch (err) {
+    if (axios.isAxiosError(err)) {
+      const status = Number(err.response?.status) || 502;
+      const timedOut = err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''));
+      const resendError = timedOut
+        ? 'Sending invoice timed out (large PDF or slow network). Try again or use a smaller invoice preview.'
+        : (typeof err.response?.data === 'string' && err.response.data) ||
+          (typeof err.response?.data?.message === 'string' && err.response.data.message) ||
+          (typeof err.response?.data?.error === 'string' && err.response.data.error) ||
+          err.message ||
+          'Failed to send invoicing email';
+      console.error('[invoicing/send] Resend HTTP error', {
+        status,
+        code: err.code,
+        timedOut,
+        data: err.response?.data,
+        message: err.message,
+      });
+      return res.status(status >= 400 && status < 600 ? status : 502).json({ error: resendError });
+    }
+    console.error('[invoicing/send] unexpected error', err);
+    return res.status(500).json({ error: err.message || 'Failed to send invoicing email' });
   }
 });
 

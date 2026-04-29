@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { format, parseISO } from "date-fns";
-import { Printer, Download, FileText, Bell, Coins, X } from "lucide-react";
+import { Printer, FileText, Coins, Send, X, Loader2 } from "lucide-react";
 import type { TranslationKey } from "@/lib/translations";
+import { translations } from "@/lib/translations";
 import { apiRequest } from "@/lib/api";
 import { INVOICING_PREVIEW_PRINT_AREA_ID } from "@/lib/invoicingPreviewPdf";
 
@@ -44,12 +45,13 @@ export type InvoicingPreviewLayout = {
 type Props = {
   document: SavedInvoicingDocumentDTO;
   layout: InvoicingPreviewLayout | null;
-  docKindLabel: string;
   t: (key: TranslationKey) => string;
   onClose: () => void;
   onPrint: () => void;
   onDownloadPdf: () => void;
-  onToolbarStub: () => void;
+  onPayments: () => void;
+  onSend: () => void;
+  sendLoading?: boolean;
 };
 
 function emailFromCustomerSnapshot(customer: Record<string, unknown> | null): string {
@@ -65,7 +67,7 @@ function isDisplayableLogoUrl(raw: string | undefined | null): raw is string {
 
 function CustomerUnderInvoice({ customer }: { customer: Record<string, unknown> | null }) {
   if (!customer) {
-    return <div className="text-xs text-neutral-500">—</div>;
+    return <div className="text-xs text-muted-foreground">—</div>;
   }
   const lines = [
     String(customer.name ?? "").trim(),
@@ -76,10 +78,10 @@ function CustomerUnderInvoice({ customer }: { customer: Record<string, unknown> 
     String(customer.vatNumber ?? "").trim(),
   ].filter((x) => x.length > 0 && x !== "-");
   if (lines.length === 0) {
-    return <div className="text-xs text-neutral-500">—</div>;
+    return <div className="text-xs text-muted-foreground">—</div>;
   }
   return (
-    <div className="mt-2 space-y-0.5 text-xs leading-snug text-neutral-900">
+    <div className="mt-2 space-y-0.5 text-xs leading-snug text-foreground">
       {lines.map((line, i) => (
         <div key={i}>{line}</div>
       ))}
@@ -106,7 +108,34 @@ function vatRowsFromItems(
     .sort((a, b) => a.rate - b.rate);
 }
 
-export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, onClose, onPrint, onDownloadPdf, onToolbarStub }: Props) {
+export function InvoicingDocumentPreview({
+  document,
+  layout,
+  t,
+  onClose,
+  onPrint,
+  onDownloadPdf,
+  onPayments,
+  onSend,
+  sendLoading = false,
+}: Props) {
+  const docLang = String(document.docLang || "").trim().toLowerCase();
+  const langBucket = docLang === "nl" || docLang === "en" ? docLang : "en";
+  const dict = translations[langBucket as "nl" | "en"];
+  const tt = (key: TranslationKey) => {
+    const localized = dict?.[key];
+    return typeof localized === "string" && localized.trim() ? localized : t(key);
+  };
+
+  const kindLabelKeyMap: Record<string, TranslationKey> = {
+    invoice: "docKindInvoice",
+    "invoice-tickets": "docKindInvoiceFromTickets",
+    quotation: "docKindQuotation",
+    credit: "docKindCreditNote",
+    delivery: "docKindDeliveryNote",
+  };
+  const docKindLabel = tt(kindLabelKeyMap[String(document.kind || "").trim().toLowerCase()] ?? "docKindInvoice");
+
   const snapshotEmail = emailFromCustomerSnapshot(document.customer);
 
   /** Snapshot email, or fetched from `/api/customers/:id` when snapshot omits email (older saves). */
@@ -153,8 +182,8 @@ export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, on
   const customerNr = document.customerId ? String(document.customerId).slice(0, 8) : "—";
   const mailTo =
     resolvedMail === null
-      ? t("invoicingPreviewMailLoading")
-      : resolvedMail || t("invoicingPreviewNoCustomerEmail");
+      ? tt("invoicingPreviewMailLoading")
+      : resolvedMail || tt("invoicingPreviewNoCustomerEmail");
 
   /** All non-empty company lines from document layout settings (shown under logo, in order). */
   const companyLines = (layout?.companyInfoLines ?? [])
@@ -173,51 +202,55 @@ export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, on
           <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Print" onClick={onPrint}>
             <Printer className="h-5 w-5" />
           </button>
-          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Download" onClick={onToolbarStub}>
-            <Download className="h-5 w-5" />
-          </button>
           <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="PDF" onClick={onDownloadPdf}>
             <FileText className="h-5 w-5" />
           </button>
-          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Notify" onClick={onToolbarStub}>
-            <Bell className="h-5 w-5" />
-          </button>
-          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Payments" onClick={onToolbarStub}>
+          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Payments" onClick={onPayments}>
             <Coins className="h-5 w-5" />
           </button>
+          <button
+            type="button"
+            className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+            aria-label="Send"
+            aria-busy={sendLoading}
+            disabled={sendLoading}
+            onClick={onSend}
+          >
+            {sendLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+          </button>
         </div>
-        <button type="button" className="h-10 w-10 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label={t("invoicingPreviewClose")} onClick={onClose}>
+        <button type="button" className="h-10 w-10 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label={tt("invoicingPreviewClose")} onClick={onClose}>
           <X className="h-7 w-7" />
         </button>
       </div>
       <p data-invoicing-print-skip className="text-center text-sm text-muted-foreground py-2 border-b border-border">
-        {t("invoicingPreviewMailPrefix")}
+        {tt("invoicingPreviewMailPrefix")}
         {mailTo}
       </p>
 
       <div data-invoicing-print-scroll className="overflow-y-auto flex-1 p-4 sm:p-6">
-        <div id={INVOICING_PREVIEW_PRINT_AREA_ID} className="mx-auto max-w-[720px] bg-white text-black shadow-sm border border-neutral-200 rounded-sm p-6 sm:p-8 min-h-[480px]">
-          <div className="flex flex-wrap justify-between gap-8 border-b border-neutral-200 pb-4 mb-4 items-start">
+        <div id={INVOICING_PREVIEW_PRINT_AREA_ID} className="mx-auto min-h-[480px] max-w-[720px] rounded-sm border border-border bg-background p-6 text-foreground shadow-sm sm:p-8">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-8 border-b border-border pb-4">
             {/* Sender: logo + company info (document layout settings) */}
             <div className="flex flex-col gap-2 max-w-[min(100%,320px)]">
               {logoUrl ? (
                 <img
                   src={logoUrl}
                   alt=""
-                  className="h-20 w-auto max-w-[220px] object-contain object-left border border-neutral-200 bg-white p-1"
+                  className="h-20 w-auto max-w-[220px] border border-border bg-background object-contain object-left p-1"
                 />
               ) : (
-                <div className="h-20 w-28 bg-neutral-900 flex items-center justify-center shrink-0 rounded-sm">
+                <div className="flex h-20 w-28 shrink-0 items-center justify-center rounded-sm bg-foreground">
                   <span className="text-[10px] text-white text-center px-1">logo</span>
                 </div>
               )}
-              <div className="text-xs leading-snug space-y-0.5 text-neutral-900">
+              <div className="space-y-0.5 text-xs leading-snug text-foreground">
                 {companyLines.length > 0 ? (
                   companyLines.map((line, i) => (
                     <div key={i}>{line}</div>
                   ))
                 ) : (
-                  <div className="text-neutral-500">—</div>
+                  <div className="text-muted-foreground">—</div>
                 )}
               </div>
             </div>
@@ -232,73 +265,73 @@ export function InvoicingDocumentPreview({ document, layout, docKindLabel, t, on
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs sm:text-sm mb-6">
             <div>
-              <span className="text-neutral-600">{t("invoicingPreviewDate")}: </span>
+              <span className="text-muted-foreground">{tt("invoicingPreviewDate")}: </span>
               <span className="font-medium">{docDate}</span>
             </div>
             <div>
-              <span className="text-neutral-600">{t("invoicingPreviewExpiration")}: </span>
+              <span className="text-muted-foreground">{tt("invoicingPreviewExpiration")}: </span>
               <span className="font-medium">{docDate}</span>
             </div>
             <div>
-              <span className="text-neutral-600">{t("invoicingPreviewCustomerNr")}: </span>
+              <span className="text-muted-foreground">{tt("invoicingPreviewCustomerNr")}: </span>
               <span className="font-medium">{customerNr}</span>
             </div>
           </div>
 
-          <table className="w-full text-xs sm:text-sm border border-neutral-300 border-collapse mb-6">
+          <table className="mb-6 w-full border-collapse border border-border text-xs sm:text-sm">
             <thead>
-              <tr className="bg-neutral-100">
-                <th className="border border-neutral-300 p-2 text-left font-medium">{t("invoicingPreviewAmount")}</th>
-                <th className="border border-neutral-300 p-2 text-left font-medium">{t("invoicingPreviewDescription")}</th>
-                <th className="border border-neutral-300 p-2 text-right font-medium">{t("invoicingPreviewPriceIncl")}</th>
-                <th className="border border-neutral-300 p-2 text-right font-medium">{t("invoicingPreviewPriceExcl")}</th>
+              <tr className="bg-muted/40">
+                <th className="border border-border p-2 text-left font-medium">{tt("invoicingPreviewAmount")}</th>
+                <th className="border border-border p-2 text-left font-medium">{tt("invoicingPreviewDescription")}</th>
+                <th className="border border-border p-2 text-right font-medium">{tt("invoicingPreviewPriceIncl")}</th>
+                <th className="border border-border p-2 text-right font-medium">{tt("invoicingPreviewPriceExcl")}</th>
               </tr>
             </thead>
             <tbody>
               {document.items.map((it, idx) => (
                 <tr key={idx}>
-                  <td className="border border-neutral-300 p-2 align-top">{it.qty}</td>
-                  <td className="border border-neutral-300 p-2 align-top">{it.description}</td>
-                  <td className="border border-neutral-300 p-2 text-right font-mono align-top">{it.perPieceIncl.toFixed(2)}</td>
-                  <td className="border border-neutral-300 p-2 text-right font-mono align-top">{it.perPieceExcl.toFixed(2)}</td>
+                  <td className="border border-border p-2 align-top">{it.qty}</td>
+                  <td className="border border-border p-2 align-top">{it.description}</td>
+                  <td className="border border-border p-2 text-right font-mono align-top">{it.perPieceIncl.toFixed(2)}</td>
+                  <td className="border border-border p-2 text-right font-mono align-top">{it.perPieceExcl.toFixed(2)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
 
           <div className="flex justify-end">
-            <div className="w-full max-w-[280px] text-sm space-y-1 border border-neutral-200 rounded p-3">
+            <div className="w-full max-w-[280px] space-y-1 rounded border border-border p-3 text-sm">
               <div className="flex justify-between gap-4">
-                <span>{t("invoicingPreviewSubtotal")}</span>
+                <span>{tt("invoicingPreviewSubtotal")}</span>
                 <span className="font-mono">{document.subtotalExcl.toFixed(2)}</span>
               </div>
               {vatRows.map((row) => (
                 <div key={row.rate} className="flex justify-between gap-4">
                   <span>
-                    {t("btwShort")} {row.rate} %
+                    {tt("btwShort")} {row.rate} %
                   </span>
                   <span className="font-mono">{row.amount.toFixed(2)}</span>
                 </div>
               ))}
-              <div className="flex justify-between gap-4 font-semibold border-t border-neutral-200 pt-1 mt-1">
-                <span>{t("totalEuro")}</span>
+              <div className="mt-1 flex justify-between gap-4 border-t border-border pt-1 font-semibold">
+                <span>{tt("totalEuro")}</span>
                 <span className="font-mono">{document.totalIncl.toFixed(2)}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span>{t("alreadyPaid")}</span>
+                <span>{tt("alreadyPaid")}</span>
                 <span className="font-mono">{document.alreadyPaid.toFixed(2)}</span>
               </div>
               <div className="flex justify-between gap-4 text-xs pt-1">
                 <span>
-                  {t("invoicingPreviewPayable")} {docDate}
+                  {tt("invoicingPreviewPayable")} {docDate}
                 </span>
                 <span className="font-mono font-medium">{document.dueAmount.toFixed(2)}</span>
               </div>
             </div>
           </div>
 
-          {footerText && <p className="text-xs text-neutral-600 mt-6">{footerText}</p>}
-          <p className="text-xs text-neutral-600 mt-4">{t("invoicingPreviewTerms")}</p>
+          {footerText && <p className="mt-6 text-xs text-muted-foreground">{footerText}</p>}
+          <p className="mt-4 text-xs text-muted-foreground">{tt("invoicingPreviewTerms")}</p>
         </div>
       </div>
     </div>

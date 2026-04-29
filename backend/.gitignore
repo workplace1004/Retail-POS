@@ -1,3 +1,4 @@
+.env
 release/
 build/installer.ico
 electron-tray-launcher/main.cjs
