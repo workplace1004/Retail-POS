@@ -909,10 +909,7 @@ export function ControlView({
   const [ccvTerminalId, setCcvTerminalId] = useState(null);
 
   const [worldlineName, setWorldlineName] = useState('Worldline RX5000');
-  const [worldlineIpAddress, setWorldlineIpAddress] = useState('');
   const [worldlinePort, setWorldlinePort] = useState('9001');
-  const [worldlineTerminalConnectsToPos, setWorldlineTerminalConnectsToPos] = useState(true);
-  const [worldlineSimulate, setWorldlineSimulate] = useState(true);
   const [worldlineActiveField, setWorldlineActiveField] = useState('name');
   const [savingWorldline, setSavingWorldline] = useState(false);
   const [worldlineTerminalId, setWorldlineTerminalId] = useState(null);
@@ -4849,10 +4846,7 @@ export function ControlView({
       if (raw) {
         const s = JSON.parse(raw);
         if (s.name != null) setWorldlineName(String(s.name));
-        if (s.ip != null) setWorldlineIpAddress(String(s.ip));
         if (s.port != null) setWorldlinePort(String(s.port));
-        if (s.simulate != null) setWorldlineSimulate(!!s.simulate);
-        if (s.terminalConnectsToPos != null) setWorldlineTerminalConnectsToPos(!!s.terminalConnectsToPos);
       }
     } catch (_) { }
     const loadWorldlineFromDb = async () => {
@@ -4869,19 +4863,7 @@ export function ControlView({
         } catch (_) { }
         setWorldlineTerminalId(wl.id || null);
         if (wl.name != null) setWorldlineName(String(wl.name));
-        if (parsed.terminalConnectsToPos === false) {
-          setWorldlineTerminalConnectsToPos(false);
-          if (parsed.ip != null) setWorldlineIpAddress(String(parsed.ip));
-        } else if (parsed.terminalConnectsToPos === true || parsed.terminalConnectsToPos === 1) {
-          setWorldlineTerminalConnectsToPos(true);
-        } else if (parsed.ip && String(parsed.ip).trim()) {
-          setWorldlineTerminalConnectsToPos(false);
-          setWorldlineIpAddress(String(parsed.ip).trim());
-        } else {
-          setWorldlineTerminalConnectsToPos(true);
-        }
         if (parsed.port != null) setWorldlinePort(String(parsed.port));
-        if (parsed.simulate != null) setWorldlineSimulate(!!parsed.simulate);
       } catch {
         // Keep local values if backend is unavailable.
       }
@@ -5386,20 +5368,11 @@ export function ControlView({
   const handleSaveWorldline = async () => {
     setSavingWorldline(true);
     try {
-      const trimmedIp = String(worldlineIpAddress || '').trim();
       const trimmedPort = String(worldlinePort || '').trim();
       const resolvedPort = trimmedPort || '9001';
       const validPort = Number.parseInt(resolvedPort, 10);
       if (!Number.isInteger(validPort) || validPort < 1 || validPort > 65535) {
         throw new Error('Worldline port must be a number between 1 and 65535.');
-      }
-      if (!worldlineTerminalConnectsToPos) {
-        if (!trimmedIp) {
-          throw new Error('Worldline terminal IP is required when the POS connects to the terminal.');
-        }
-        if (/^[0-9]+$/.test(trimmedIp)) {
-          throw new Error('Worldline terminal IP is invalid. Please enter a full IP like 192.168.1.60.');
-        }
       }
 
       let merged = {};
@@ -5423,16 +5396,12 @@ export function ControlView({
         ...merged,
         model: 'RX5000',
         protocol: 'ctep',
-        simulate: !!worldlineSimulate,
-        terminalConnectsToPos: !!worldlineTerminalConnectsToPos,
+        simulate: false,
+        terminalConnectsToPos: true,
         listenHost: '0.0.0.0',
         port: resolvedPort,
       };
-      if (worldlineTerminalConnectsToPos) {
-        delete connectionConfig.ip;
-      } else {
-        connectionConfig.ip = trimmedIp;
-      }
+      delete connectionConfig.ip;
       const terminalPayload = {
         name: String(worldlineName || '').trim() || 'Worldline Terminal',
         type: 'worldline',
@@ -5464,10 +5433,7 @@ export function ControlView({
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('pos_worldline', JSON.stringify({
           name: terminalPayload.name,
-          ip: connectionConfig.ip,
           port: connectionConfig.port,
-          simulate: !!worldlineSimulate,
-          terminalConnectsToPos: !!worldlineTerminalConnectsToPos,
         }));
       }
       showToast('success', 'Worldline settings saved.');
@@ -5578,13 +5544,11 @@ export function ControlView({
 
   const worldlineKeyboardValue =
     worldlineActiveField === 'name' ? worldlineName
-      : worldlineActiveField === 'ip' && !worldlineTerminalConnectsToPos ? worldlineIpAddress
-        : worldlineActiveField === 'port' ? worldlinePort
-          : '';
+      : worldlineActiveField === 'port' ? worldlinePort
+        : '';
 
   const worldlineKeyboardOnChange = (v) => {
     if (worldlineActiveField === 'name') setWorldlineName(v);
-    else if (worldlineActiveField === 'ip' && !worldlineTerminalConnectsToPos) setWorldlineIpAddress(v);
     else if (worldlineActiveField === 'port') setWorldlinePort(v);
   };
 
@@ -6579,12 +6543,7 @@ export function ControlView({
           vivaKeyboardOnChange,
           vivaKeyboardValue,
           worldlineName,
-          worldlineIpAddress,
           worldlinePort,
-          worldlineTerminalConnectsToPos,
-          setWorldlineTerminalConnectsToPos,
-          worldlineSimulate,
-          setWorldlineSimulate,
           worldlineKeyboardOnChange,
           worldlineKeyboardValue,
           ccvName,
@@ -6726,7 +6685,6 @@ export function ControlView({
           setVivaPort,
           setWorldlineActiveField,
           setWorldlineName,
-          setWorldlineIpAddress,
           setWorldlinePort,
           setCcvActiveField,
           setCcvName,

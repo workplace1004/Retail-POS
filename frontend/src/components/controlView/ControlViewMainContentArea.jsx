@@ -202,12 +202,7 @@ export function ControlViewMainContentArea({ ctx }) {
     vivaKeyboardOnChange,
     vivaKeyboardValue,
     worldlineName,
-    worldlineIpAddress,
     worldlinePort,
-    worldlineTerminalConnectsToPos,
-    setWorldlineTerminalConnectsToPos,
-    worldlineSimulate,
-    setWorldlineSimulate,
     worldlineKeyboardOnChange,
     worldlineKeyboardValue,
     ccvName,
@@ -349,7 +344,6 @@ export function ControlViewMainContentArea({ ctx }) {
     setVivaPort,
     setWorldlineActiveField,
     setWorldlineName,
-    setWorldlineIpAddress,
     setWorldlinePort,
     setCcvActiveField,
     setCcvName,
@@ -2811,14 +2805,8 @@ export function ControlViewMainContentArea({ ctx }) {
                       worldlineName={worldlineName}
                       setWorldlineName={setWorldlineName}
                       setWorldlineActiveField={setWorldlineActiveField}
-                      worldlineTerminalConnectsToPos={worldlineTerminalConnectsToPos}
-                      setWorldlineTerminalConnectsToPos={setWorldlineTerminalConnectsToPos}
-                      worldlineIpAddress={worldlineIpAddress}
-                      setWorldlineIpAddress={setWorldlineIpAddress}
                       worldlinePort={worldlinePort}
                       setWorldlinePort={setWorldlinePort}
-                      worldlineSimulate={worldlineSimulate}
-                      setWorldlineSimulate={setWorldlineSimulate}
                       savingWorldline={savingWorldline}
                       handleSaveWorldline={handleSaveWorldline}
                       worldlineKeyboardValue={worldlineKeyboardValue}

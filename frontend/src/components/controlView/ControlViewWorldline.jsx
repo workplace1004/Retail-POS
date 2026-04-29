@@ -7,14 +7,8 @@ export function ControlViewWorldline({
   worldlineName,
   setWorldlineName,
   setWorldlineActiveField,
-  worldlineTerminalConnectsToPos,
-  setWorldlineTerminalConnectsToPos,
-  worldlineIpAddress,
-  setWorldlineIpAddress,
   worldlinePort,
   setWorldlinePort,
-  worldlineSimulate,
-  setWorldlineSimulate,
   savingWorldline,
   handleSaveWorldline,
   worldlineKeyboardValue,
@@ -42,43 +36,6 @@ export function ControlViewWorldline({
 
   return (
     <div className="relative min-h-[570px] max-h-full rounded-xl border border-pos-border !overflow-y-auto bg-pos-panel/30 p-4">
-      <div className="flex flex-col gap-3 mb-4 max-w-xl mx-auto">
-        <label className="flex items-start gap-3 cursor-pointer select-none text-pos-text">
-          <input
-            type="radio"
-            className="mt-1.5"
-            checked={!!worldlineTerminalConnectsToPos}
-            onChange={() => setWorldlineTerminalConnectsToPos(true)}
-          />
-          <span>
-            <span className="font-medium block">
-              {tr('control.worldline.modeInboundTitle', 'Terminal connects to this POS (recommended)')}
-            </span>
-            <span className="text-sm text-pos-muted block mt-0.5">
-              {tr(
-                'control.worldline.modeInboundBody',
-                'The Worldline device is configured with this computer\'s IP address. This app listens on the port below.',
-              )}
-            </span>
-          </span>
-        </label>
-        <label className="flex items-start gap-3 cursor-pointer select-none text-pos-text">
-          <input
-            type="radio"
-            className="mt-1.5"
-            checked={!worldlineTerminalConnectsToPos}
-            onChange={() => setWorldlineTerminalConnectsToPos(false)}
-          />
-          <span>
-            <span className="font-medium block">
-              {tr('control.worldline.modeOutboundTitle', 'This POS connects to the terminal (legacy)')}
-            </span>
-            <span className="text-sm text-pos-muted block mt-0.5">
-              {tr('control.worldline.modeOutboundBody', 'Use if your terminal accepts incoming TCP from the register (terminal IP + port).')}
-            </span>
-          </span>
-        </label>
-      </div>
 
       <div className="flex text-sm gap-x-10 gap-y-4 mb-6">
         <div className="flex flex-col gap-4 pt-[10px] w-full justify-center items-center">
@@ -96,71 +53,20 @@ export function ControlViewWorldline({
             />
           </div>
 
-          {worldlineTerminalConnectsToPos ? (
-            <>
-              {lanHints.length > 0 ? (
-                <div className="text-sm text-pos-muted max-w-md text-center px-2">
-                  {tr('control.worldline.posLanHint', 'Use on the terminal one of these addresses for this PC:')}{' '}
-                  <span className="text-pos-text font-mono">{lanHints.join(', ')}</span>
-                </div>
-              ) : null}
-              <div className="flex items-center gap-2">
-                <label className="block text-pos-text font-medium min-w-[100px] max-w-[100px] shrink-0">
-                  {tr('control.worldline.listenPort', 'Listen port *')}
-                </label>
-                <input
-                  type="text"
-                  value={worldlinePort}
-                  onChange={(e) => setWorldlinePort(e.target.value)}
-                  onFocus={() => setWorldlineActiveField('port')}
-                  onClick={() => setWorldlineActiveField('port')}
-                  placeholder={tr('control.worldline.listenPortPlaceholder', '9001')}
-                  className="px-4 w-[200px] py-3 bg-pos-panel h-[40px] border border-gray-300 rounded-lg text-gray-200 placeholder-pos-muted focus:outline-none focus:border-green-500"
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-2">
-                <label className="block text-pos-text font-medium min-w-[100px] max-w-[100px] shrink-0">
-                  {tr('control.worldline.terminalIp', 'Terminal IP *')}
-                </label>
-                <input
-                  type="text"
-                  value={worldlineIpAddress}
-                  onChange={(e) => setWorldlineIpAddress(e.target.value)}
-                  onFocus={() => setWorldlineActiveField('ip')}
-                  onClick={() => setWorldlineActiveField('ip')}
-                  placeholder={tr('control.worldline.ipPlaceholder', 'e.g. 192.168.1.60')}
-                  className="px-4 w-[200px] py-3 bg-pos-panel h-[40px] border border-gray-300 rounded-lg text-gray-200 placeholder-pos-muted focus:outline-none focus:border-green-500"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="block text-pos-text font-medium min-w-[100px] max-w-[100px] shrink-0">
-                  {tr('control.worldline.terminalPort', 'Terminal port *')}
-                </label>
-                <input
-                  type="text"
-                  value={worldlinePort}
-                  onChange={(e) => setWorldlinePort(e.target.value)}
-                  onFocus={() => setWorldlineActiveField('port')}
-                  onClick={() => setWorldlineActiveField('port')}
-                  placeholder={tr('control.worldline.portPlaceholder', '9001')}
-                  className="px-4 w-[200px] py-3 bg-pos-panel h-[40px] border border-gray-300 rounded-lg text-gray-200 placeholder-pos-muted focus:outline-none focus:border-green-500"
-                />
-              </div>
-            </>
-          )}
-
-          <label className="flex items-center gap-2 cursor-pointer select-none text-pos-text">
+          <div className="flex items-center gap-2">
+            <label className="block text-pos-text font-medium min-w-[100px] max-w-[100px] shrink-0">
+              {tr('control.worldline.listenPort', 'Listen port *')}
+            </label>
             <input
-              type="checkbox"
-              className="h-5 w-5 rounded border-pos-border"
-              checked={!!worldlineSimulate}
-              onChange={(e) => setWorldlineSimulate(e.target.checked)}
+              type="text"
+              value={worldlinePort}
+              onChange={(e) => setWorldlinePort(e.target.value)}
+              onFocus={() => setWorldlineActiveField('port')}
+              onClick={() => setWorldlineActiveField('port')}
+              placeholder={tr('control.worldline.listenPortPlaceholder', '9001')}
+              className="px-4 w-[200px] py-3 bg-pos-panel h-[40px] border border-gray-300 rounded-lg text-gray-200 placeholder-pos-muted focus:outline-none focus:border-green-500"
             />
-            <span>{tr('control.worldline.simulate', 'Test mode (simulate payment, no CTEP on wire)')}</span>
-          </label>
+          </div>
         </div>
       </div>
 
@@ -175,7 +81,7 @@ export function ControlViewWorldline({
           {tr('control.save', 'Save')}
         </button>
       </div>
-      <div className="shrink-0  bottom-0">
+      <div className="shrink-0 absolute bottom-0">
         <SmallKeyboardWithNumpad value={worldlineKeyboardValue} onChange={worldlineKeyboardOnChange} />
       </div>
     </div>

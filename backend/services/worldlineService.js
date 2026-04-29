@@ -38,7 +38,6 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     return '';
   };
 
-  const ip = get('ip', 'ipAddress', 'ip_address', 'host', 'hostname') || String(defaults.ip || '').trim();
   const portRaw = get('port', 'Port', 'listenPort', 'listen_port');
   const listenHostRaw = get('listenHost', 'listen_host', 'bindAddress', 'bind_address') || '0.0.0.0';
   const timeoutMsRaw = get('timeoutMs', 'timeout', 'timeout_ms');
@@ -56,29 +55,8 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const envSim = String(process.env.WORLDLINE_SIMULATE || '').trim() === '1';
   const simulate = envSim || parseBool(get('simulate', 'testMode', 'test_mode'));
 
-  const dirExplicit = get('terminalConnectsToPos', 'terminal_connects_to_pos', 'inboundListener');
-  let terminalConnectsToPos;
-  if (dirExplicit !== '') {
-    const low = String(dirExplicit).toLowerCase();
-    if (low === 'outbound' || low === '0' || low === 'false' || low === 'no') {
-      terminalConnectsToPos = false;
-    } else if (low === 'inbound' || low === 'listener' || low === '1' || low === 'true' || low === 'yes') {
-      terminalConnectsToPos = true;
-    } else {
-      terminalConnectsToPos = parseBool(dirExplicit);
-    }
-  } else if (ip) {
-    terminalConnectsToPos = false;
-  } else {
-    terminalConnectsToPos = true;
-  }
-
   const parsedPort = Number.parseInt(portRaw || '0', 10);
   const parsedTimeoutMs = Number.parseInt(timeoutMsRaw || String(defaults.timeoutMs || ''), 10);
-
-  if (!terminalConnectsToPos && !ip) {
-    throw new Error('Worldline terminal IP is required when the POS connects to the terminal (outbound mode).');
-  }
 
   let approveRegex;
   try {
@@ -97,10 +75,10 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const listenHost = listenHostRaw || '0.0.0.0';
 
   return {
-    terminalConnectsToPos,
+    terminalConnectsToPos: true,
     listenHost,
     listenPort,
-    ip,
+    ip: '',
     port: listenPort,
     timeoutMs: Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0 ? parsedTimeoutMs : 180000,
     currencyCode: currencyCode || 'EUR',
@@ -141,33 +119,6 @@ function buildWirePayload(config, bodyUtf8) {
   if (!config.appendLrc) return core;
   const lrc = Buffer.from([xorLrc(core)]);
   return Buffer.concat([core, lrc]);
-}
-
-function tcpProbe(host, port, ms = 8000) {
-  return new Promise((resolve, reject) => {
-    const socket = new net.Socket();
-    const t = setTimeout(() => {
-      try {
-        socket.destroy();
-      } catch {
-        // ignore
-      }
-      reject(new Error('TCP connection timeout'));
-    }, ms);
-    socket.once('error', (err) => {
-      clearTimeout(t);
-      reject(err);
-    });
-    socket.connect(port, host, () => {
-      clearTimeout(t);
-      try {
-        socket.end();
-      } catch {
-        // ignore
-      }
-      resolve();
-    });
-  });
 }
 
 /** Terminal (client) connects to this POS — one accepted socket per payment. */
@@ -327,19 +278,6 @@ function exchangeOnSocket(socket, config, payload, { destroySocketWhenDone = tru
   });
 }
 
-function tcpOutboundSendAndRead(config, payload) {
-  return new Promise((resolve, reject) => {
-    const socket = new net.Socket();
-    socket.once('error', reject);
-    socket.connect(config.port, config.ip, () => {
-      socket.removeAllListeners('error');
-      exchangeOnSocket(socket, config, payload, { destroySocketWhenDone: true })
-        .then(resolve)
-        .catch(reject);
-    });
-  });
-}
-
 class WorldlineServiceInstance {
   constructor(config) {
     this.config = config;
@@ -365,29 +303,17 @@ class WorldlineServiceInstance {
           message: 'Worldline HTTP bridge URL is set (run a live payment to verify end-to-end).',
         };
       }
-      if (this.config.terminalConnectsToPos) {
-        await new Promise((resolve, reject) => {
-          const srv = net.createServer();
-          srv.once('error', reject);
-          srv.listen(this.config.listenPort, this.config.listenHost, () => {
-            srv.close(() => resolve());
-          });
+      await new Promise((resolve, reject) => {
+        const srv = net.createServer();
+        srv.once('error', reject);
+        srv.listen(this.config.listenPort, this.config.listenHost, () => {
+          srv.close(() => resolve());
         });
-        return {
-          success: true,
-          message: `This POS can listen on ${this.config.listenHost}:${this.config.listenPort}. Configure the Worldline terminal with this computer's IP and this port.`,
-        };
-      }
-      if (mode === 'unconfigured') {
-        await tcpProbe(this.config.ip, this.config.port, 8000);
-        return {
-          success: true,
-          message:
-            'TCP port reachable on the terminal. Configure saleBodyTemplate + approveRegex (CTEP), or bridgeUrl / simulate for payments.',
-        };
-      }
-      await tcpProbe(this.config.ip, this.config.port, 8000);
-      return { success: true, message: 'TCP connection to Worldline terminal OK.' };
+      });
+      return {
+        success: true,
+        message: `This POS can listen on ${this.config.listenHost}:${this.config.listenPort}. Configure the Worldline terminal with this computer's IP and this port.`,
+      };
     } catch (err) {
       return {
         success: false,
@@ -461,7 +387,7 @@ class WorldlineServiceInstance {
       finish({
         state: 'ERROR',
         message:
-          'Worldline CTEP is not fully configured: set connection_string.simulate=true (test), bridgeUrl (HTTP gateway), or saleBodyTemplate + approveRegex for raw TCP CTEP.',
+          'Worldline CTEP is not fully configured: set bridgeUrl (HTTP gateway), or saleBodyTemplate + approveRegex for TCP after the terminal connects, or WORLDLINE_SIMULATE=1 for dev only.',
         details: { mode },
       });
       return;
@@ -564,34 +490,29 @@ class WorldlineServiceInstance {
       });
       const payload = buildWirePayload(this.config, body);
 
-      let clientSocket;
-      if (this.config.terminalConnectsToPos) {
-        const curWait = this.sessions.get(sessionId);
-        if (curWait) {
-          curWait.message = `Listening on ${this.config.listenHost}:${this.config.listenPort} — connect from the terminal…`;
-          this.sessions.set(sessionId, curWait);
-        }
-        clientSocket = await listenForTerminalSocket(
-          this.config.listenHost,
-          this.config.listenPort,
-          this.config.timeoutMs || 180000,
-          () => {
-            const s = this.sessions.get(sessionId);
-            return !!(s && s.cancelRequested);
-          },
-          () => {
-            const s = this.sessions.get(sessionId);
-            if (s) {
-              s.message = 'Terminal connected — processing…';
-              this.sessions.set(sessionId, s);
-            }
-          },
-        );
+      const curWait = this.sessions.get(sessionId);
+      if (curWait) {
+        curWait.message = `Listening on ${this.config.listenHost}:${this.config.listenPort} — connect from the terminal…`;
+        this.sessions.set(sessionId, curWait);
       }
+      const clientSocket = await listenForTerminalSocket(
+        this.config.listenHost,
+        this.config.listenPort,
+        this.config.timeoutMs || 180000,
+        () => {
+          const s = this.sessions.get(sessionId);
+          return !!(s && s.cancelRequested);
+        },
+        () => {
+          const s = this.sessions.get(sessionId);
+          if (s) {
+            s.message = 'Terminal connected — processing…';
+            this.sessions.set(sessionId, s);
+          }
+        },
+      );
 
-      const raw = this.config.terminalConnectsToPos
-        ? await exchangeOnSocket(clientSocket, this.config, payload, { destroySocketWhenDone: true })
-        : await tcpOutboundSendAndRead(this.config, payload);
+      const raw = await exchangeOnSocket(clientSocket, this.config, payload, { destroySocketWhenDone: true });
       const cur = this.sessions.get(sessionId);
       if (!cur) return;
       if (cur.cancelRequested) {
@@ -665,26 +586,6 @@ class WorldlineServiceInstance {
     session.state = 'CANCELLED';
     session.message = 'Cancellation requested...';
     this.sessions.set(sessionId, session);
-
-    if (this.config.cancelBodyTemplate && !this.config.simulate && !this.config.bridgeUrl) {
-      try {
-        const body = substituteSaleTemplate(this.config.cancelBodyTemplate, {
-          amountEuro: session.amountEuro,
-          amountMinor: session.amountMinor,
-          reference: session.reference,
-          currency: this.config.currencyCode,
-        });
-        const payload = buildWirePayload(this.config, body);
-        const shortCfg = { ...this.config, timeoutMs: Math.min(this.config.timeoutMs, 30000) };
-        if (this.config.terminalConnectsToPos) {
-          /* cancel on inbound without an active socket is best-effort */
-        } else {
-          await tcpOutboundSendAndRead(shortCfg, payload);
-        }
-      } catch {
-        // ignore cancel send errors
-      }
-    }
 
     return { success: true, message: 'Payment cancelled.' };
   }
