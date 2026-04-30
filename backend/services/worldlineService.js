@@ -2,6 +2,27 @@ import net from 'net';
 
 const sharedSessions = new Map();
 
+function wlLog(message, data) {
+  const ts = new Date().toISOString();
+  if (data === undefined) {
+    console.log(`[${ts}] [worldline] ${message}`);
+    return;
+  }
+  console.log(`[${ts}] [worldline] ${message}`, data);
+}
+
+function previewText(value, max = 400) {
+  const s = String(value ?? '');
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+function previewHex(buffer, maxBytes = 96) {
+  if (!buffer || !Buffer.isBuffer(buffer)) return '';
+  const part = buffer.subarray(0, maxBytes);
+  const hx = part.toString('hex').replace(/(.{2})/g, '$1 ').trim();
+  return buffer.length > maxBytes ? `${hx} …` : hx;
+}
+
 function parseBool(v) {
   if (v === true || v === 1) return true;
   const s = String(v ?? '').trim().toLowerCase();
@@ -183,6 +204,12 @@ function listenForTerminalSocket(host, port, timeoutMs, isCancelled, onListening
         // ignore
       }
       socket.setTimeout(0);
+      wlLog('Terminal socket accepted', {
+        remoteAddress: socket.remoteAddress || '',
+        remotePort: socket.remotePort || '',
+        localAddress: socket.localAddress || '',
+        localPort: socket.localPort || '',
+      });
       resolve(socket);
     });
 
@@ -249,6 +276,10 @@ function exchangeOnSocket(socket, config, payload, { destroySocketWhenDone = tru
     });
 
     socket.on('data', (chunk) => {
+      wlLog('Received chunk from terminal', {
+        chunkBytes: chunk.length,
+        totalBytesBeforeAppend: buffer.length,
+      });
       buffer = Buffer.concat([buffer, chunk]);
       bumpIdle();
       if (config.wrapStxEtx) {
@@ -265,6 +296,12 @@ function exchangeOnSocket(socket, config, payload, { destroySocketWhenDone = tru
     });
 
     const writeStart = () => {
+      wlLog('Sending payload to terminal', {
+        bytes: payload.length,
+        wrapStxEtx: !!config.wrapStxEtx,
+        appendLrc: !!config.appendLrc,
+        payloadHexPreview: previewHex(payload),
+      });
       socket.write(payload, () => {
         bumpIdle();
       });
@@ -345,6 +382,21 @@ class WorldlineServiceInstance {
       config: this.config,
     };
     this.sessions.set(sessionId, session);
+    wlLog('Session created', {
+      sessionId,
+      amountEuro: amount,
+      amountMinor,
+      reference,
+      mode: this.effectiveMode(),
+      listenHost: this.config.listenHost,
+      listenPort: this.config.listenPort,
+      timeoutMs: this.config.timeoutMs,
+      hasSaleBodyTemplate: !!this.config.saleBodyTemplate,
+      approveRegex: this.config.approveRegex?.source || '',
+      declineRegex: this.config.declineRegex?.source || '',
+      wrapStxEtx: !!this.config.wrapStxEtx,
+      appendLrc: !!this.config.appendLrc,
+    });
 
     this.processPaymentAsync(sessionId).catch((err) => {
       const current = this.sessions.get(sessionId);
@@ -382,8 +434,10 @@ class WorldlineServiceInstance {
     };
 
     const mode = this.effectiveMode();
+    wlLog('Session processing started', { sessionId, mode });
 
     if (mode === 'unconfigured') {
+      wlLog('Session failed: unconfigured mode', { sessionId });
       finish({
         state: 'ERROR',
         message:
@@ -398,9 +452,11 @@ class WorldlineServiceInstance {
       const cur = this.sessions.get(sessionId);
       if (!cur) return;
       if (cur.cancelRequested) {
+        wlLog('Session cancelled during simulate', { sessionId });
         finish({ state: 'CANCELLED', message: 'Payment cancelled.', details: { mode: 'simulate' } });
         return;
       }
+      wlLog('Session approved in simulate mode', { sessionId });
       finish({
         state: 'APPROVED',
         message: 'Payment approved (simulate mode).',
@@ -428,6 +484,11 @@ class WorldlineServiceInstance {
           }),
         });
         const text = await res.text();
+        wlLog('Bridge response received', {
+          sessionId,
+          status: res.status,
+          bodyPreview: previewText(text, 500),
+        });
         let data = {};
         try {
           data = JSON.parse(text);
@@ -441,6 +502,7 @@ class WorldlineServiceInstance {
           return;
         }
         if (!res.ok) {
+          wlLog('Bridge returned non-OK', { sessionId, status: res.status });
           finish({
             state: 'ERROR',
             message: data.message || data.error || `Bridge HTTP ${res.status}`,
@@ -450,20 +512,24 @@ class WorldlineServiceInstance {
         }
         const state = String(data.state || data.status || '').toUpperCase();
         if (state === 'APPROVED' || state === 'SUCCESS' || data.approved === true) {
+          wlLog('Session approved by bridge response', { sessionId, state });
           finish({
             state: 'APPROVED',
             message: String(data.message || 'Payment approved.'),
             details: data,
           });
         } else if (state === 'DECLINED' || state === 'FAILURE') {
+          wlLog('Session declined by bridge response', { sessionId, state });
           finish({
             state: 'DECLINED',
             message: String(data.message || 'Payment declined.'),
             details: data,
           });
         } else if (state === 'CANCELLED') {
+          wlLog('Session cancelled by bridge response', { sessionId, state });
           finish({ state: 'CANCELLED', message: String(data.message || 'Payment cancelled.'), details: data });
         } else {
+          wlLog('Bridge response could not be classified', { sessionId, state, keys: Object.keys(data || {}) });
           finish({
             state: 'ERROR',
             message: String(data.message || 'Unexpected bridge response'),
@@ -471,6 +537,7 @@ class WorldlineServiceInstance {
           });
         }
       } catch (err) {
+        wlLog('Bridge request failed', { sessionId, error: err?.message || '' });
         finish({
           state: 'ERROR',
           message: err.message || 'Bridge request failed',
@@ -489,6 +556,13 @@ class WorldlineServiceInstance {
         currency: this.config.currencyCode,
       });
       const payload = buildWirePayload(this.config, body);
+      wlLog('TCP template prepared', {
+        sessionId,
+        bodyPreview: previewText(body, 500),
+        bodyLength: body.length,
+        payloadBytes: payload.length,
+        payloadHexPreview: previewHex(payload),
+      });
 
       const curWait = this.sessions.get(sessionId);
       if (curWait) {
@@ -522,8 +596,18 @@ class WorldlineServiceInstance {
       const ascii = raw.toString('binary');
       const utf8 = raw.toString('utf8');
       const text = utf8.includes('\uFFFD') ? ascii : utf8;
+      wlLog('Terminal raw response received', {
+        sessionId,
+        rawBytes: raw.length,
+        rawHexPreview: previewHex(raw),
+        textPreview: previewText(text, 800),
+      });
 
       if (this.config.declineRegex.test(text)) {
+        wlLog('Response classified as DECLINED', {
+          sessionId,
+          declineRegex: this.config.declineRegex?.source || '',
+        });
         finish({
           state: 'DECLINED',
           message: 'Payment declined.',
@@ -532,6 +616,10 @@ class WorldlineServiceInstance {
         return;
       }
       if (this.config.approveRegex.test(text)) {
+        wlLog('Response classified as APPROVED', {
+          sessionId,
+          approveRegex: this.config.approveRegex?.source || '',
+        });
         finish({
           state: 'APPROVED',
           message: 'Payment approved.',
@@ -545,12 +633,23 @@ class WorldlineServiceInstance {
           'Worldline response did not match approveRegex or declineRegex. Adjust approveRegex or check terminal logs.',
         details: { rawPreview: text.slice(0, 800) },
       });
+      wlLog('Response did not match approve/decline regex', {
+        sessionId,
+        approveRegex: this.config.approveRegex?.source || '',
+        declineRegex: this.config.declineRegex?.source || '',
+      });
     } catch (err) {
       const msg = err?.message || '';
       if (msg === 'Cancelled') {
+        wlLog('Session cancelled while waiting for socket/response', { sessionId });
         finish({ state: 'CANCELLED', message: 'Payment cancelled.', details: {} });
         return;
       }
+      wlLog('TCP processing failed', {
+        sessionId,
+        error: err?.message || '',
+        code: err?.code || '',
+      });
       finish({
         state: 'ERROR',
         message: msg || 'Worldline TCP error',
@@ -586,6 +685,7 @@ class WorldlineServiceInstance {
     session.state = 'CANCELLED';
     session.message = 'Cancellation requested...';
     this.sessions.set(sessionId, session);
+    wlLog('Cancellation requested', { sessionId, state: session.state });
 
     return { success: true, message: 'Payment cancelled.' };
   }

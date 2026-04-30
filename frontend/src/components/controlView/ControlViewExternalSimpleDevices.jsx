@@ -69,25 +69,6 @@ export function ControlViewExternalSimpleDevices(props) {
     );
   }
 
-  if (subNavId === 'Credit Card') {
-    return (
-      <div className="flex flex-col min-h-[650px] max-h-[550px] justify-between items-center">
-        <div className="flex flex-col gap-6 mb-6 pt-[150px]">
-          <div className="flex items-center gap-10">
-            <label className="block text-pos-text text-sm font-medium shrink-0">{tr('control.external.type', 'Type:')}</label>
-            <Dropdown options={mapTranslatedOptions(props.CREDIT_CARD_TYPE_OPTIONS)} value={props.creditCardType} onChange={props.setCreditCardType} placeholder={tr('control.external.disabled', 'Disabled')} className="text-sm min-w-[220px]" />
-          </div>
-          <div className="flex justify-center mt-[100px] text-md">
-            <button type="button" className="flex items-center gap-4 px-6 py-2 rounded-lg bg-green-600 text-white font-medium active:bg-green-500 disabled:opacity-50" disabled={props.savingCreditCard} onClick={props.handleSaveCreditCard}>
-              <svg fill="currentColor" width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M-5.732,2.97-7.97.732a2.474,2.474,0,0,0-1.483-.7A.491.491,0,0,0-9.591,0H-18.5A2.5,2.5,0,0,0-21,2.5v11A2.5,2.5,0,0,0-18.5,16h11A2.5,2.5,0,0,0-5,13.5V4.737A2.483,2.483,0,0,0-5.732,2.97ZM-13,1V5.455h-3.591V1Zm-4.272,14V10.545h8.544V15ZM-6,13.5A1.5,1.5,0,0,1-7.5,15h-.228V10.045a.5.5,0,0,0-.5-.5h-9.544a.5.5,0,0,0-.5.5V15H-18.5A1.5,1.5,0,0,1-20,13.5V2.5A1.5,1.5,0,0,1-18.5,1h.909V5.955a.5.5,0,0,0,.5.5h7.5a.5.5,0,0,0,.5-.5v-4.8a1.492,1.492,0,0,1,.414.285l2.238,2.238A1.511,1.511,0,0,1-6,4.737Z" transform="translate(21)" /></svg>
-              {tr('control.save', 'Save')}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (subNavId === 'Scale') {
     const { scaleType, scaleConnectionMode, scalePort, scaleLsmIp, scaleUseWeightLabels, scaleConfirmWeight } = props;
     const enabled = Boolean(scaleType) && scaleType !== 'disabled';

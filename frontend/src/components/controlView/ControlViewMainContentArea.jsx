@@ -64,7 +64,6 @@ export function ControlViewMainContentArea({ ctx }) {
   const {
     BARCODE_SCANNER_TYPE_OPTIONS,
     CASH_REGISTER_SUB_NAV_ITEMS,
-    CREDIT_CARD_TYPE_OPTIONS,
     EXTERNAL_DEVICES_SUB_NAV_ITEMS,
     GROUPING_RECEIPT_OPTIONS,
     LANGUAGE_OPTIONS,
@@ -119,7 +118,6 @@ export function ControlViewMainContentArea({ ctx }) {
     currentRegisterName,
     realtimeSocket,
     currentUser,
-    creditCardType,
     discounts,
     discountsListRef,
     finalTicketsCompanyData1,
@@ -141,7 +139,6 @@ export function ControlViewMainContentArea({ ctx }) {
     handleSaveBarcodeScanner,
     handleSaveCashmatic,
     cardTerminalProvider,
-    handleSaveCreditCard,
     handleSaveFinalTickets,
     handleSavePayworld,
     handleSaveCcv,
@@ -271,7 +268,6 @@ export function ControlViewMainContentArea({ ctx }) {
     savingAppLanguage,
     savingBarcodeScanner,
     savingCashmatic,
-    savingCreditCard,
     savingFinalTickets,
     savingPayworld,
     savingCcv,
@@ -314,7 +310,6 @@ export function ControlViewMainContentArea({ ctx }) {
     setCashmaticUrl,
     setCashmaticUsername,
     setCardTerminalProvider,
-    setCreditCardType,
     setDefaultPrinter,
     setDeleteConfirmCategoryId,
     setDeleteConfirmDiscountId,
@@ -2622,7 +2617,7 @@ export function ControlViewMainContentArea({ ctx }) {
                 scrollLabelsByPage={scrollLabelsByPage}
               />
             )}
-            {(subNavId === 'Price Display' || subNavId === 'RFID Reader' || subNavId === 'Barcode Scanner' || subNavId === 'Credit Card' || subNavId === 'Scale') && (
+            {(subNavId === 'Price Display' || subNavId === 'RFID Reader' || subNavId === 'Barcode Scanner' || subNavId === 'Scale') && (
               <ControlViewExternalSimpleDevices
                 subNavId={subNavId}
                 tr={tr}
@@ -2630,7 +2625,6 @@ export function ControlViewMainContentArea({ ctx }) {
                 PRICE_DISPLAY_TYPE_OPTIONS={PRICE_DISPLAY_TYPE_OPTIONS}
                 RFID_READER_TYPE_OPTIONS={RFID_READER_TYPE_OPTIONS}
                 BARCODE_SCANNER_TYPE_OPTIONS={BARCODE_SCANNER_TYPE_OPTIONS}
-                CREDIT_CARD_TYPE_OPTIONS={CREDIT_CARD_TYPE_OPTIONS}
                 SCALE_TYPE_OPTIONS={SCALE_TYPE_OPTIONS}
                 SCALE_CONNECTION_MODE_OPTIONS={SCALE_CONNECTION_MODE_OPTIONS}
                 SCALE_PORT_OPTIONS={SCALE_PORT_OPTIONS}
@@ -2646,10 +2640,6 @@ export function ControlViewMainContentArea({ ctx }) {
                 setBarcodeScannerType={setBarcodeScannerType}
                 savingBarcodeScanner={savingBarcodeScanner}
                 handleSaveBarcodeScanner={handleSaveBarcodeScanner}
-                creditCardType={creditCardType}
-                setCreditCardType={setCreditCardType}
-                savingCreditCard={savingCreditCard}
-                handleSaveCreditCard={handleSaveCreditCard}
                 scaleType={scaleType}
                 setScaleType={setScaleType}
                 scaleConnectionMode={scaleConnectionMode}

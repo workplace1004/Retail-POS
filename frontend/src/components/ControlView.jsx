@@ -94,7 +94,6 @@ const EXTERNAL_DEVICES_SUB_NAV_ITEMS = [
   'Price Display',
   'RFID Reader',
   'Barcode Scanner',
-  'Credit Card',
   'Scale',
   'Cashmatic',
   'Card'
@@ -138,14 +137,6 @@ const BARCODE_SCANNER_TYPE_OPTIONS = [
   { value: 'serial', labelKey: 'control.external.serial', fallback: 'Serial' },
   { value: 'keyboard-input', labelKey: 'control.external.barcodeScannerType.keyboardInput', fallback: 'Keyboard input' },
   { value: 'tcp-ip', labelKey: 'control.external.barcodeScannerType.tcpIp', fallback: 'TCP / IP' }
-];
-
-const CREDIT_CARD_TYPE_OPTIONS = [
-  { value: 'disabled', labelKey: 'control.external.disabled', fallback: 'Disabled' },
-  { value: 'payworld', labelKey: 'control.external.creditCardType.payworld', fallback: 'Payworld' },
-  { value: 'ccv', labelKey: 'control.external.creditCardType.ccv', fallback: 'CCV' },
-  { value: 'worldline', labelKey: 'control.external.creditCardType.worldline', fallback: 'Worldline' },
-  { value: 'viva-wallet', labelKey: 'control.external.creditCardType.vivaWallet', fallback: 'Viva wallet' }
 ];
 
 const SCALE_TYPE_OPTIONS = [
@@ -861,9 +852,6 @@ export function ControlView({
   const [barcodeScannerKeyboardValue, setBarcodeScannerKeyboardValue] = useState('');
   const [savingBarcodeScanner, setSavingBarcodeScanner] = useState(false);
 
-  const [creditCardType, setCreditCardType] = useState('disabled');
-  const [creditCardKeyboardValue, setCreditCardKeyboardValue] = useState('');
-  const [savingCreditCard, setSavingCreditCard] = useState(false);
 
   const [scaleType, setScaleType] = useState('disabled');
   const [scalePort, setScalePort] = useState('');
@@ -928,7 +916,8 @@ export function ControlView({
   const [bancontactProTerminalId, setBancontactProTerminalId] = useState(null);
 
   useEffect(() => {
-    if (topNavId === 'external-devices' && (subNavId === 'Payworld' || subNavId === 'CCV')) {
+    if (topNavId !== 'external-devices') return;
+    if (subNavId === 'Payworld' || subNavId === 'CCV' || subNavId === 'Credit Card') {
       setSubNavId('Card');
     }
   }, [topNavId, subNavId]);
@@ -4616,31 +4605,6 @@ export function ControlView({
   }, [topNavId, subNavId]);
 
   useEffect(() => {
-    if (topNavId !== 'external-devices' || subNavId !== 'Credit Card') return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await fetch(`${API}/settings/credit-card`);
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (res.ok && data.type != null) {
-          setCreditCardType(data.type);
-          return;
-        }
-      } catch (_) { }
-      try {
-        const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_credit_card');
-        if (raw && !cancelled) {
-          const s = JSON.parse(raw);
-          if (s.type != null) setCreditCardType(s.type);
-        }
-      } catch (_) { }
-    };
-    load();
-    return () => { cancelled = true; };
-  }, [topNavId, subNavId]);
-
-  useEffect(() => {
     if (topNavId !== 'external-devices' || subNavId !== 'Scale') return;
     let cancelled = false;
     const applyScaleSettings = (s) => {
@@ -5015,25 +4979,6 @@ export function ControlView({
       showToast('error', e?.message || tr('control.saveFailed', 'Save failed.'));
     } finally {
       setSavingBarcodeScanner(false);
-    }
-  };
-
-  const handleSaveCreditCard = async () => {
-    setSavingCreditCard(true);
-    try {
-      const res = await fetch(`${API}/settings/credit-card`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: creditCardType }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || 'Failed to save');
-      if (typeof localStorage !== 'undefined') localStorage.setItem('pos_credit_card', JSON.stringify({ type: creditCardType }));
-      showToast('success', tr('control.saved', 'Saved.'));
-    } catch (e) {
-      showToast('error', e?.message || tr('control.saveFailed', 'Save failed.'));
-    } finally {
-      setSavingCreditCard(false);
     }
   };
 
@@ -6474,7 +6419,6 @@ export function ControlView({
           realtimeSocket,
           BARCODE_SCANNER_TYPE_OPTIONS,
           CASH_REGISTER_SUB_NAV_ITEMS,
-          CREDIT_CARD_TYPE_OPTIONS,
           EXTERNAL_DEVICES_SUB_NAV_ITEMS,
           GROUPING_RECEIPT_OPTIONS,
           LANGUAGE_OPTIONS,
@@ -6525,7 +6469,6 @@ export function ControlView({
           categoriesListRef,
           categoriesLoading,
           controlSidebarId: effectiveControlSidebarId,
-          creditCardType,
           discounts,
           setDiscounts,
           discountsListRef,
@@ -6548,7 +6491,6 @@ export function ControlView({
           handleSaveBarcodeScanner,
           handleSaveCashmatic,
           cardTerminalProvider,
-          handleSaveCreditCard,
           handleSaveFinalTickets,
           handleSavePayworld,
           handleSaveCcv,
@@ -6678,7 +6620,6 @@ export function ControlView({
           savingAppLanguage,
           savingBarcodeScanner,
           savingCashmatic,
-          savingCreditCard,
           savingFinalTickets,
           savingPayworld,
           savingCcv,
@@ -6721,7 +6662,6 @@ export function ControlView({
           setCashmaticUrl,
           setCashmaticUsername,
           setCardTerminalProvider,
-          setCreditCardType,
           setDefaultPrinter,
           setDeleteConfirmCategoryId,
           setDeleteConfirmDiscountId,
