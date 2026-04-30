@@ -46,39 +46,41 @@ export function ControlViewWorldline({
 
   return (
     <div className="relative flex min-h-[570px] max-h-full flex-col rounded-xl border border-pos-border bg-pos-panel/30">
-      <div className="flex-1 overflow-y-auto p-4 pb-6">
+      <div className="flex-1 overflow-y-auto p-4 pb-0">
 
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 text-sm">
-          <div className="flex items-center gap-2">
-            <label className="block min-w-[100px] max-w-[100px] shrink-0 font-medium text-pos-text">
-              {tr('control.worldline.name', 'Name *')}
-            </label>
-            <input
-              type="text"
-              value={worldlineName}
-              onChange={(e) => setWorldlineName(e.target.value)}
-              onFocus={() => setWorldlineActiveField('name')}
-              onClick={() => setWorldlineActiveField('name')}
-              className="h-[40px] flex-1 rounded-lg border border-gray-300 bg-pos-panel px-3 text-gray-200 placeholder-pos-muted focus:border-green-500 focus:outline-none"
-            />
+          <div className="grid grid-cols-2 gap-10">
+            <div className="flex items-center gap-2">
+              <label className="block min-w-[100px] max-w-[100px] shrink-0 font-medium text-pos-text">
+                {tr('control.worldline.name', 'Name *')}
+              </label>
+              <input
+                type="text"
+                value={worldlineName}
+                onChange={(e) => setWorldlineName(e.target.value)}
+                onFocus={() => setWorldlineActiveField('name')}
+                onClick={() => setWorldlineActiveField('name')}
+                className="h-[40px] flex-1 rounded-lg border border-gray-300 bg-pos-panel px-3 text-gray-200 placeholder-pos-muted focus:border-green-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="block min-w-[100px] max-w-[100px] shrink-0 font-medium text-pos-text">
+                {tr('control.worldline.listenPort', 'Listen port *')}
+              </label>
+              <input
+                type="text"
+                value={worldlinePort}
+                onChange={(e) => setWorldlinePort(e.target.value)}
+                onFocus={() => setWorldlineActiveField('port')}
+                onClick={() => setWorldlineActiveField('port')}
+                placeholder={tr('control.worldline.listenPortPlaceholder', '9001')}
+                className="h-[40px] w-[200px] rounded-lg border border-gray-300 bg-pos-panel px-3 text-gray-200 placeholder-pos-muted focus:border-green-500 focus:outline-none"
+              />
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="block min-w-[100px] max-w-[100px] shrink-0 font-medium text-pos-text">
-              {tr('control.worldline.listenPort', 'Listen port *')}
-            </label>
-            <input
-              type="text"
-              value={worldlinePort}
-              onChange={(e) => setWorldlinePort(e.target.value)}
-              onFocus={() => setWorldlineActiveField('port')}
-              onClick={() => setWorldlineActiveField('port')}
-              placeholder={tr('control.worldline.listenPortPlaceholder', '9001')}
-              className="h-[40px] w-[200px] rounded-lg border border-gray-300 bg-pos-panel px-3 text-gray-200 placeholder-pos-muted focus:border-green-500 focus:outline-none"
-            />
-          </div>
-
-          <div className="mt-2 border-t border-pos-border pt-4">
+          <div className="mt-2">
             <label className="mb-1 block text-xs font-medium text-pos-text">
               {tr('control.worldline.saleBodyTemplate', 'Sale body template')}
             </label>
@@ -94,9 +96,9 @@ export function ControlViewWorldline({
             />
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <label className="text-xs font-medium text-pos-text">
+          <div className="grid grid-cols-2 gap-10">
+            <div className="flex min-w-0 flex-1 gap-1 items-center">
+              <label className="text-xs min-w-[100px] max-w-[100px] font-medium text-pos-text">
                 {tr('control.worldline.approveRegex', 'Approve regex')}
               </label>
               <input
@@ -108,8 +110,8 @@ export function ControlViewWorldline({
                 className="h-[40px] w-full rounded-lg border border-gray-300 bg-pos-panel px-3 font-mono text-xs text-gray-200 focus:border-green-500 focus:outline-none"
               />
             </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <label className="text-xs font-medium text-pos-text">
+            <div className="flex min-w-0 flex-1 gap-1 items-center">
+              <label className="text-xs min-w-[100px] max-w-[100px] font-medium text-pos-text">
                 {tr('control.worldline.declineRegex', 'Decline regex')}
               </label>
               <input
@@ -148,20 +150,20 @@ export function ControlViewWorldline({
           </div>
         </div>
 
-        <div className="mt-6 flex justify-center">
+        <div className="mt-4 flex justify-center">
           <button
             type="button"
-            className="flex items-center gap-4 rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white active:bg-green-500 disabled:opacity-50"
+            className="flex items-center gap-4 rounded-lg bg-green-600 px-6 py-2 text-md font-medium text-white active:bg-green-500 disabled:opacity-50"
             disabled={savingWorldline}
             onClick={handleSaveWorldline}
           >
-            <svg fill="#ffffff" width="18px" height="18px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M-5.732,2.97-7.97.732a2.474,2.474,0,0,0-1.483-.7A.491.491,0,0,0-9.591,0H-18.5A2.5,2.5,0,0,0-21,2.5v11A2.5,2.5,0,0,0-18.5,16h11A2.5,2.5,0,0,0-5,13.5V4.737A2.483,2.483,0,0,0-5.732,2.97ZM-13,1V5.455h-3.591V1Zm-4.272,14V10.545h8.544V15ZM-6,13.5A1.5,1.5,0,0,1-7.5,15h-.228V10.045a.5.5,0,0,0-.5-.5h-9.544a.5.5,0,0,0-.5.5V15H-18.5A1.5,1.5,0,0,1-20,13.5V2.5A1.5,1.5,0,0,1-18.5,1h.909V5.955a.5.5,0,0,0,.5.5h7.5a.5.5,0,0,0,.5-.5v-4.8a1.492,1.492,0,0,1,.414.285l2.238,2.238A1.511,1.511,0,0,1-6,4.737Z" transform="translate(21)" /></svg>
+            <svg fill="#ffffff" width="14px" height="14px" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M-5.732,2.97-7.97.732a2.474,2.474,0,0,0-1.483-.7A.491.491,0,0,0-9.591,0H-18.5A2.5,2.5,0,0,0-21,2.5v11A2.5,2.5,0,0,0-18.5,16h11A2.5,2.5,0,0,0-5,13.5V4.737A2.483,2.483,0,0,0-5.732,2.97ZM-13,1V5.455h-3.591V1Zm-4.272,14V10.545h8.544V15ZM-6,13.5A1.5,1.5,0,0,1-7.5,15h-.228V10.045a.5.5,0,0,0-.5-.5h-9.544a.5.5,0,0,0-.5.5V15H-18.5A1.5,1.5,0,0,1-20,13.5V2.5A1.5,1.5,0,0,1-18.5,1h.909V5.955a.5.5,0,0,0,.5.5h7.5a.5.5,0,0,0,.5-.5v-4.8a1.492,1.492,0,0,1,.414.285l2.238,2.238A1.511,1.511,0,0,1-6,4.737Z" transform="translate(21)" /></svg>
             {tr('control.save', 'Save')}
           </button>
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-pos-border bg-pos-panel/80 px-2 py-2">
+      <div className="shrink-0 px-2">
         <SmallKeyboardWithNumpad value={worldlineKeyboardValue} onChange={worldlineKeyboardOnChange} />
       </div>
     </div>
