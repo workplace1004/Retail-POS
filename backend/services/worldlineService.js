@@ -434,6 +434,22 @@ class WorldlineServiceInstance {
     };
 
     const mode = this.effectiveMode();
+    wlLog('Loaded worldline config snapshot', {
+      sessionId,
+      mode,
+      listenHost: this.config.listenHost,
+      listenPort: this.config.listenPort,
+      timeoutMs: this.config.timeoutMs,
+      currencyCode: this.config.currencyCode,
+      hasBridgeUrl: !!this.config.bridgeUrl,
+      hasSaleBodyTemplate: !!this.config.saleBodyTemplate,
+      saleBodyTemplatePreview: previewText(this.config.saleBodyTemplate || '', 180),
+      saleBodyTemplateLength: String(this.config.saleBodyTemplate || '').length,
+      approveRegex: this.config.approveRegex?.source || '',
+      declineRegex: this.config.declineRegex?.source || '',
+      wrapStxEtx: !!this.config.wrapStxEtx,
+      appendLrc: !!this.config.appendLrc,
+    });
     wlLog('Session processing started', { sessionId, mode });
 
     if (mode === 'unconfigured') {
