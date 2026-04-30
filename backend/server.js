@@ -2323,6 +2323,29 @@ function summarizePayworldConnection(connectionString) {
   }
 }
 
+/** Log summary for Worldline JSON (not Payworld-shaped; avoids empty ip/posId noise). */
+function summarizeWorldlineConnection(connectionString) {
+  const raw = String(connectionString || '').trim();
+  if (!raw) return { configured: false };
+  try {
+    const p = JSON.parse(raw);
+    const tpl = p.saleBodyTemplate || p.ctepSaleBody || p.sale_body_template || '';
+    const bridge = String(p.bridgeUrl || p.bridge_url || process.env.WORLDLINE_BRIDGE_URL || '').trim();
+    return {
+      configured: true,
+      listenHost: p.listenHost || p.listen_host || '0.0.0.0',
+      listenPort: p.port || p.listenPort || p.listen_port || '',
+      hasSaleBodyTemplate: String(tpl).trim().length > 0,
+      simulate: !!(p.simulate || String(process.env.WORLDLINE_SIMULATE || '').trim() === '1'),
+      hasBridgeUrl: bridge.length > 0,
+      currencyCode: p.currencyCode || p.currency || '',
+      timeoutMs: p.timeoutMs || p.timeout || '',
+    };
+  } catch {
+    return { configured: true, raw: raw.slice(0, 120) };
+  }
+}
+
 const SETTING_KEY_PRODUCT_SUBPRODUCT_LINKS = 'product_subproduct_links';
 const SETTING_KEY_PRODUCT_KIOSK_GROUP_CONFIG = 'product_kiosk_subproduct_group_config';
 
@@ -9316,7 +9339,7 @@ app.post('/api/worldline/start', async (req, res) => {
       amount,
       terminalId: terminal.id,
       terminalName: terminal.name,
-      connection: summarizePayworldConnection(terminal.connectionString),
+      connection: summarizeWorldlineConnection(terminal.connectionString),
     });
 
     const service = createWorldlineService({ connection_string: terminal.connectionString });
