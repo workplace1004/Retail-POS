@@ -49,6 +49,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const timeoutMs = Number.parseInt(get('timeoutMs', 'timeout') || String(defaults.timeoutMs || 180000), 10);
   const recoveryDelayMs = Number.parseInt(get('recoveryDelayMs') || '100000', 10);
   const saleResponseWaitMs = Number.parseInt(get('saleResponseWaitMs') || '180000', 10);
+  const bridgeTimeoutMs = Number.parseInt(get('bridgeTimeoutMs', 'bridge_timeout_ms') || '240000', 10);
   const heartbeatMs = Number.parseInt(get('heartbeatMs') || '12000', 10);
   const merchantRefPrefix = get('merchantRefPrefix') || 'POS';
   const rawTcpEnabled = parseBool(get('rawTcp', 'noStxEtx'));
@@ -79,6 +80,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180000,
     recoveryDelayMs: Number.isFinite(recoveryDelayMs) && recoveryDelayMs > 0 ? recoveryDelayMs : 100000,
     saleResponseWaitMs: Number.isFinite(saleResponseWaitMs) && saleResponseWaitMs > 0 ? saleResponseWaitMs : 180000,
+    bridgeTimeoutMs: Number.isFinite(bridgeTimeoutMs) && bridgeTimeoutMs > 0 ? bridgeTimeoutMs : 240000,
     heartbeatMs: Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : 12000,
     merchantRefPrefix,
     wrapStxEtx,
@@ -557,7 +559,7 @@ class WorldlineServiceInstance {
       try {
         patch({ state: 'IN_PROGRESS', message: 'Processing payment via Worldline bridge...' });
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15000);
+        const timeout = setTimeout(() => controller.abort(), this.config.bridgeTimeoutMs || 240000);
         const res = await fetch(this.config.bridgeUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -617,7 +619,7 @@ class WorldlineServiceInstance {
         const msg = String(err?.message || err || 'Bridge request failed');
         const isAbort = String(err?.name || '').toLowerCase() === 'aborterror';
         const hint = isAbort
-          ? 'Bridge request timed out (15s). Verify bridge service is running and responsive.'
+          ? `Bridge request timed out (${Math.round((this.config.bridgeTimeoutMs || 240000) / 1000)}s). Verify bridge service is running and responsive.`
           : 'Could not reach bridge service. Verify bridge process is running and URL/port are correct.';
         wlLog('Bridge request failed', {
           bridgeUrl: this.config.bridgeUrl,
