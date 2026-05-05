@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "node scripts/dev-with-bridge.cjs",
     "dev:server": "node --watch server.js",
+    "worldline-bridge": "node scripts/run-worldline-ctep-bridge.cjs",
     "start": "node server.js",
     "generate": "prisma generate",
     "migrate": "prisma db push --skip-generate",

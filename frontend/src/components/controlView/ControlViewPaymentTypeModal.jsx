@@ -11,7 +11,7 @@ const PAYMENT_INTEGRATION_OPTIONS = [
 
 const CARD_PROVIDER_OPTIONS = [
   { value: 'payworld', labelKey: 'control.paymentTypes.cardProvider.payworld', fallback: 'payworld' },
-  { value: 'worldline', labelKey: 'control.paymentTypes.cardProvider.worldline', fallback: 'worldline' },
+  { value: 'worldline', labelKey: 'control.paymentTypes.cardProvider.worldline', fallback: 'Worldline' },
   { value: 'bancontactpro', labelKey: 'control.paymentTypes.cardProvider.bancontactpro', fallback: 'Bancontact QR (Pro)' },
   { value: 'ccv', labelKey: 'control.paymentTypes.cardProvider.ccv', fallback: 'ccv' },
   { value: 'viva', labelKey: 'control.paymentTypes.cardProvider.viva', fallback: 'viva' },

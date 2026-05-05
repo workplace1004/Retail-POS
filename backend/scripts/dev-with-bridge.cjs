@@ -1,6 +1,6 @@
 /**
- * Dev entry: starts the Node Worldline HTTP bridge, then the API server.
- * No Java/Maven required.
+ * `npm run dev`: starts Worldline C-TEP Java bridge + Node API (watch mode).
+ * Bridge uses the same launcher as `npm run worldline-bridge`.
  */
 'use strict';
 
@@ -8,26 +8,21 @@ const { spawn } = require('child_process');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const children = [];
+const bridgeScript = path.join(__dirname, 'run-worldline-ctep-bridge.cjs');
 
-const defaultBridgeUrl = 'http://127.0.0.1:8099/worldline';
 const env = {
   ...process.env,
-  WORLDLINE_BRIDGE_URL: process.env.WORLDLINE_BRIDGE_URL || defaultBridgeUrl,
+  WORLDLINE_CTEP_HTTP_URL: process.env.WORLDLINE_CTEP_HTTP_URL || 'http://127.0.0.1:3210',
 };
 
-function start(label, args) {
-  const child = spawn(process.execPath, args, {
+const children = [];
+
+function start(label, command, args) {
+  const child = spawn(command, args, {
     cwd: root,
     stdio: 'inherit',
     env,
     windowsHide: false,
-  });
-  child.on('exit', (code, signal) => {
-    if (!shuttingDown) {
-      console.error(`[dev-with-bridge] ${label} exited (code=${code}, signal=${signal || 'none'})`);
-      shutdown(code ?? 1);
-    }
   });
   children.push({ label, child });
   return child;
@@ -51,7 +46,19 @@ function shutdown(exitCode = 0) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-console.log('[dev-with-bridge] Starting Node Worldline HTTP bridge + API (WORLDLINE_BRIDGE_URL=%s)', env.WORLDLINE_BRIDGE_URL);
+console.log('[dev-with-bridge] Starting Worldline C-TEP bridge + API (WORLDLINE_CTEP_HTTP_URL=%s)', env.WORLDLINE_CTEP_HTTP_URL);
 
-start('worldline-http-bridge', ['worldline-http-bridge.js']);
-start('server', ['--watch', 'server.js']);
+const bridgeChild = start('worldline-ctep-bridge', process.execPath, [bridgeScript]);
+bridgeChild.on('exit', (code, signal) => {
+  if (shuttingDown) return;
+  console.error(
+    `[dev-with-bridge] Bridge process stopped (code=${code}, signal=${signal || 'none'}). API keeps running. Ensure Java + JAR (see worldline-ctep-bridge/README) or run: npm run worldline-bridge`,
+  );
+});
+
+const serverChild = start('server', process.execPath, ['--watch', 'server.js']);
+serverChild.on('exit', (code, signal) => {
+  if (shuttingDown) return;
+  console.error(`[dev-with-bridge] Server exited (code=${code}, signal=${signal || 'none'})`);
+  shutdown(code == null ? 1 : code);
+});

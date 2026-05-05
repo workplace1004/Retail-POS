@@ -8,7 +8,7 @@ import { ControlViewExternalSimpleDevices } from './ControlViewExternalSimpleDev
 import { ControlViewCashmatic } from './ControlViewCashmatic';
 import { ControlViewPayworld } from './ControlViewPayworld';
 import { ControlViewBancontactPro } from './ControlViewBancontactPro';
-import { ControlViewWorldline } from './ControlViewWorldline';
+import { ControlViewWorldlineCtep } from './ControlViewWorldlineCtep';
 import { ControlViewCcv } from './ControlViewCcv';
 import { ControlViewExternalPrinter } from './ControlViewExternalPrinter';
 import { TopNavIcon, ReportTabIcon } from './controlViewNavIcons';
@@ -199,12 +199,10 @@ export function ControlViewMainContentArea({ ctx }) {
     vivaKeyboardOnChange,
     vivaKeyboardValue,
     worldlineName,
-    worldlinePort,
-    worldlineSaleBodyTemplate,
-    worldlineApproveRegex,
-    worldlineDeclineRegex,
-    worldlineRawTcp,
-    worldlineAppendLrc,
+    worldlineHttpBaseUrl,
+    setWorldlineName,
+    setWorldlineHttpBaseUrl,
+    setWorldlineActiveField,
     worldlineKeyboardOnChange,
     worldlineKeyboardValue,
     ccvName,
@@ -342,14 +340,6 @@ export function ControlViewMainContentArea({ ctx }) {
     setVivaName,
     setVivaIpAddress,
     setVivaPort,
-    setWorldlineActiveField,
-    setWorldlineName,
-    setWorldlinePort,
-    setWorldlineSaleBodyTemplate,
-    setWorldlineApproveRegex,
-    setWorldlineDeclineRegex,
-    setWorldlineRawTcp,
-    setWorldlineAppendLrc,
     setCcvActiveField,
     setCcvName,
     setCcvIpAddress,
@@ -2778,6 +2768,21 @@ export function ControlViewMainContentArea({ ctx }) {
                       payworldKeyboardOnChange={vivaKeyboardOnChange}
                     />
                   </div>
+                ) : cardTerminalProvider === 'worldline' ? (
+                  <div className="w-full">
+                    <ControlViewWorldlineCtep
+                      tr={tr}
+                      worldlineName={worldlineName}
+                      setWorldlineName={setWorldlineName}
+                      setWorldlineActiveField={setWorldlineActiveField}
+                      worldlineHttpBaseUrl={worldlineHttpBaseUrl}
+                      setWorldlineHttpBaseUrl={setWorldlineHttpBaseUrl}
+                      savingWorldline={savingWorldline}
+                      handleSaveWorldline={handleSaveWorldline}
+                      worldlineKeyboardValue={worldlineKeyboardValue}
+                      worldlineKeyboardOnChange={worldlineKeyboardOnChange}
+                    />
+                  </div>
                 ) : cardTerminalProvider === 'bancontactpro' ? (
                   <div className="w-full">
                     <ControlViewBancontactPro
@@ -2795,31 +2800,6 @@ export function ControlViewMainContentArea({ ctx }) {
                       handleSaveBancontactPro={handleSaveBancontactPro}
                       bancontactProKeyboardValue={bancontactProKeyboardValue}
                       bancontactProKeyboardOnChange={bancontactProKeyboardOnChange}
-                    />
-                  </div>
-                ) : cardTerminalProvider === 'worldline' ? (
-                  <div className="w-full">
-                    <ControlViewWorldline
-                      tr={tr}
-                      worldlineName={worldlineName}
-                      setWorldlineName={setWorldlineName}
-                      setWorldlineActiveField={setWorldlineActiveField}
-                      worldlinePort={worldlinePort}
-                      setWorldlinePort={setWorldlinePort}
-                      worldlineSaleBodyTemplate={worldlineSaleBodyTemplate}
-                      setWorldlineSaleBodyTemplate={setWorldlineSaleBodyTemplate}
-                      worldlineApproveRegex={worldlineApproveRegex}
-                      setWorldlineApproveRegex={setWorldlineApproveRegex}
-                      worldlineDeclineRegex={worldlineDeclineRegex}
-                      setWorldlineDeclineRegex={setWorldlineDeclineRegex}
-                      worldlineRawTcp={worldlineRawTcp}
-                      setWorldlineRawTcp={setWorldlineRawTcp}
-                      worldlineAppendLrc={worldlineAppendLrc}
-                      setWorldlineAppendLrc={setWorldlineAppendLrc}
-                      savingWorldline={savingWorldline}
-                      handleSaveWorldline={handleSaveWorldline}
-                      worldlineKeyboardValue={worldlineKeyboardValue}
-                      worldlineKeyboardOnChange={worldlineKeyboardOnChange}
                     />
                   </div>
                 ) : (

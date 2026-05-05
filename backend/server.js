@@ -15,7 +15,7 @@ import { createCashmaticService } from './services/cashmaticService.js';
 import { createPayworldService } from './services/payworldService.js';
 import { createCcvService } from './services/ccvService.js';
 import { createVivaService } from './services/vivaService.js';
-import { createWorldlineService } from './services/worldlineService.js';
+import { createWorldlineCtepPosService } from './services/worldlineCtepPosService.js';
 import {
   testBancontactProConnection,
   createBancontactProPayment,
@@ -2323,27 +2323,19 @@ function summarizePayworldConnection(connectionString) {
   }
 }
 
-/** Log summary for Worldline JSON (not Payworld-shaped; avoids empty ip/posId noise). */
-function summarizeWorldlineConnection(connectionString) {
+/** Log summary for Worldline C-TEP Java bridge (sample `WorldlineCtepBrowserBridge`). */
+function summarizeWorldlineCtepConnection(connectionString) {
   const raw = String(connectionString || '').trim();
   if (!raw) return { configured: false };
   try {
     const p = JSON.parse(raw);
-    const tpl = p.saleBodyTemplate || p.ctepSaleBody || p.sale_body_template || '';
-    const bridge = String(p.bridgeUrl || p.bridge_url || process.env.WORLDLINE_BRIDGE_URL || '').trim();
-    const syncUrl = String(
-      p.syncServiceUrl || p.sync_service_url || process.env.WORLDLINE_SYNC_SERVICE_URL || '',
-    ).trim();
+    const http = String(p.httpBaseUrl || p.http_base_url || process.env.WORLDLINE_CTEP_HTTP_URL || '').trim();
     return {
       configured: true,
-      listenHost: p.listenHost || p.listen_host || '0.0.0.0',
-      listenPort: p.port || p.listenPort || p.listen_port || '',
-      hasSaleBodyTemplate: String(tpl).trim().length > 0,
-      simulate: !!(p.simulate || String(process.env.WORLDLINE_SIMULATE || '').trim() === '1'),
-      hasBridgeUrl: bridge.length > 0,
-      hasSyncServiceUrl: syncUrl.length > 0,
-      currencyCode: p.currencyCode || p.currency || '',
-      timeoutMs: p.timeoutMs || p.timeout || '',
+      httpBaseUrl: http ? `${http.slice(0, 64)}${http.length > 64 ? '…' : ''}` : '',
+      ctepPort: p.ctepPort || p.ctep_listen_port || '',
+      pollMs: p.pollMs || p.poll_ms || '',
+      timeoutSec: p.timeoutSec || p.timeout_sec || '',
     };
   } catch {
     return { configured: true, raw: raw.slice(0, 120) };
@@ -6472,7 +6464,7 @@ app.post('/api/payment-terminals/:id/test', async (req, res) => {
       if (result.success) res.json({ success: true, message: result.message });
       else res.status(500).json({ success: false, error: result.message });
     } else if (t.type === 'worldline') {
-      const service = createWorldlineService({ connection_string: t.connectionString });
+      const service = createWorldlineCtepPosService({ connection_string: t.connectionString });
       const result = await service.testConnection();
       if (result.success) res.json({ success: true, message: result.message });
       else res.status(500).json({ success: false, error: result.message });
@@ -9320,7 +9312,7 @@ app.post('/api/viva/config', async (req, res) => {
   }
 });
 
-// ---------- Worldline payment (CTEP / IP — session-based) ----------
+// ---------- Worldline C-TEP (Java bridge — same contract as sample/POS_INTEGRATION_EXAMPLE_JS.js) ----------
 app.post('/api/worldline/start', async (req, res) => {
   try {
     const amount = Number(req.body?.amount);
@@ -9343,10 +9335,10 @@ app.post('/api/worldline/start', async (req, res) => {
       amount,
       terminalId: terminal.id,
       terminalName: terminal.name,
-      connection: summarizeWorldlineConnection(terminal.connectionString),
+      connection: summarizeWorldlineCtepConnection(terminal.connectionString),
     });
 
-    const service = createWorldlineService({ connection_string: terminal.connectionString });
+    const service = createWorldlineCtepPosService({ connection_string: terminal.connectionString });
     const result = service.createSession(amount);
     if (!result?.success) {
       return res.status(500).json({ ok: false, error: result?.message || 'Failed to start Worldline payment.' });
@@ -9379,7 +9371,7 @@ app.get('/api/worldline/status/:sessionId', async (req, res) => {
       return res.status(503).json({ ok: false, error: 'Worldline terminal not configured or not enabled.' });
     }
 
-    const service = createWorldlineService({ connection_string: terminal.connectionString });
+    const service = createWorldlineCtepPosService({ connection_string: terminal.connectionString });
     const status = service.getSessionStatus(sessionId);
     if (!status?.success) return res.status(404).json({ ok: false, error: status?.message || 'Session not found' });
     return res.json(status);
@@ -9402,32 +9394,13 @@ app.post('/api/worldline/cancel/:sessionId', async (req, res) => {
       return res.status(503).json({ ok: false, error: 'Worldline terminal not configured or not enabled.' });
     }
 
-    const service = createWorldlineService({ connection_string: terminal.connectionString });
+    const service = createWorldlineCtepPosService({ connection_string: terminal.connectionString });
     const result = await service.cancelSession(sessionId);
     if (!result?.success) return res.status(400).json({ ok: false, error: result?.message || 'Cancel failed' });
     return res.json({ ok: true, message: result.message || 'Payment cancelled.' });
   } catch (err) {
     console.error('POST /api/worldline/cancel/:sessionId', err);
     return res.status(500).json({ ok: false, error: err.message || 'Failed to cancel Worldline payment' });
-  }
-});
-
-/** Non-sensitive LAN IPv4s for Worldline terminal setup (terminal dials this POS). */
-app.get('/api/worldline/local-addrs', (req, res) => {
-  try {
-    const nets = os.networkInterfaces();
-    const ips = [];
-    for (const name of Object.keys(nets)) {
-      for (const n of nets[name] || []) {
-        const fam = n?.family;
-        const isV4 = fam === 'IPv4' || fam === 4;
-        if (n && isV4 && !n.internal) ips.push(n.address);
-      }
-    }
-    res.json({ ok: true, ips });
-  } catch (err) {
-    console.error('GET /api/worldline/local-addrs', err);
-    res.status(500).json({ ok: false, error: err.message || 'Failed to read network interfaces' });
   }
 });
 

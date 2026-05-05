@@ -897,13 +897,8 @@ export function ControlView({
   const [savingCcv, setSavingCcv] = useState(false);
   const [ccvTerminalId, setCcvTerminalId] = useState(null);
 
-  const [worldlineName, setWorldlineName] = useState('Worldline RX5000');
-  const [worldlinePort, setWorldlinePort] = useState('9001');
-  const [worldlineSaleBodyTemplate, setWorldlineSaleBodyTemplate] = useState('');
-  const [worldlineApproveRegex, setWorldlineApproveRegex] = useState('approved|accept|ok|autoris|transaction ok');
-  const [worldlineDeclineRegex, setWorldlineDeclineRegex] = useState('declin|refus|refused|error|annul');
-  const [worldlineRawTcp, setWorldlineRawTcp] = useState(false);
-  const [worldlineAppendLrc, setWorldlineAppendLrc] = useState(true);
+  const [worldlineName, setWorldlineName] = useState('Worldline C-TEP');
+  const [worldlineHttpBaseUrl, setWorldlineHttpBaseUrl] = useState('http://127.0.0.1:3210');
   const [worldlineActiveField, setWorldlineActiveField] = useState('name');
   const [savingWorldline, setSavingWorldline] = useState(false);
   const [worldlineTerminalId, setWorldlineTerminalId] = useState(null);
@@ -4812,49 +4807,29 @@ export function ControlView({
     if (topNavId !== 'external-devices' || subNavId !== 'Card') return;
     let cancelled = false;
     try {
-      const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_worldline');
+      const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_worldline_ctep');
       if (raw) {
         const s = JSON.parse(raw);
         if (s.name != null) setWorldlineName(String(s.name));
-        if (s.port != null) setWorldlinePort(String(s.port));
-        if (s.saleBodyTemplate != null) setWorldlineSaleBodyTemplate(String(s.saleBodyTemplate));
-        if (s.approveRegex != null) setWorldlineApproveRegex(String(s.approveRegex));
-        if (s.declineRegex != null) setWorldlineDeclineRegex(String(s.declineRegex));
-        if (s.rawTcp != null) setWorldlineRawTcp(!!s.rawTcp);
-        if (s.appendLrc != null) setWorldlineAppendLrc(!!s.appendLrc);
+        if (s.httpBaseUrl != null) setWorldlineHttpBaseUrl(String(s.httpBaseUrl));
       }
-    } catch (_) { }
+    } catch (_) { /* ignore */ }
     const loadWorldlineFromDb = async () => {
       try {
         const res = await fetch(`${API}/payment-terminals`);
         const data = await res.json().catch(() => null);
         if (!res.ok) return;
         const terminals = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-        const wl = terminals.find((t) => String(t?.type || '').toLowerCase() === 'worldline');
-        if (!wl || cancelled) return;
+        const row = terminals.find((t) => String(t?.type || '').toLowerCase() === 'worldline');
+        if (!row || cancelled) return;
         let parsed = {};
         try {
-          parsed = typeof wl.connection_string === 'string' ? JSON.parse(wl.connection_string) : (wl.connection_string || {});
-        } catch (_) { }
-        setWorldlineTerminalId(wl.id || null);
-        if (wl.name != null) setWorldlineName(String(wl.name));
-        if (parsed.port != null) setWorldlinePort(String(parsed.port));
-        const tpl = parsed.saleBodyTemplate ?? parsed.ctepSaleBody ?? parsed.sale_body_template;
-        setWorldlineSaleBodyTemplate(tpl != null ? String(tpl) : '');
-        const ar = parsed.approveRegex ?? parsed.approve_regex;
-        if (ar != null && String(ar).trim() !== '') setWorldlineApproveRegex(String(ar));
-        else setWorldlineApproveRegex('approved|accept|ok|autoris|transaction ok');
-        const dr = parsed.declineRegex ?? parsed.decline_regex;
-        if (dr != null && String(dr).trim() !== '') setWorldlineDeclineRegex(String(dr));
-        else setWorldlineDeclineRegex('declin|refus|refused|error|annul');
-        const rawTcp =
-          parsed.noStxEtx === true
-          || parsed.rawTcp === true
-          || String(parsed.noStxEtx || '').toLowerCase() === 'true'
-          || String(parsed.rawTcp || '').toLowerCase() === 'true';
-        setWorldlineRawTcp(!!rawTcp);
-        const lrcOff = parsed.appendLrc === false || parsed.append_lrc === false;
-        setWorldlineAppendLrc(!lrcOff);
+          parsed = typeof row.connection_string === 'string' ? JSON.parse(row.connection_string) : (row.connection_string || {});
+        } catch (_) { /* ignore */ }
+        setWorldlineTerminalId(row.id || null);
+        if (row.name != null) setWorldlineName(String(row.name));
+        const u = parsed.httpBaseUrl || parsed.http_base_url;
+        if (u != null && String(u).trim() !== '') setWorldlineHttpBaseUrl(String(u).trim());
       } catch {
         // Keep local values if backend is unavailable.
       }
@@ -5343,70 +5318,24 @@ export function ControlView({
   const handleSaveWorldline = async () => {
     setSavingWorldline(true);
     try {
-      const trimmedPort = String(worldlinePort || '').trim();
-      const resolvedPort = trimmedPort || '9001';
-      const validPort = Number.parseInt(resolvedPort, 10);
-      if (!Number.isInteger(validPort) || validPort < 1 || validPort > 65535) {
-        throw new Error('Worldline port must be a number between 1 and 65535.');
+      const httpTrim = String(worldlineHttpBaseUrl || '').trim();
+      if (!httpTrim) {
+        throw new Error('Bridge HTTP URL is required (same as sample, e.g. http://127.0.0.1:3210).');
       }
-
-      let merged = {};
       try {
-        const listRes = await fetch(`${API}/payment-terminals`);
-        const listData = await listRes.json().catch(() => null);
-        const list = Array.isArray(listData?.data) ? listData.data : (Array.isArray(listData) ? listData : []);
-        const existingWl = list.find((t) => String(t?.type || '').toLowerCase() === 'worldline');
-        if (existingWl?.connection_string) {
-          try {
-            merged = typeof existingWl.connection_string === 'string'
-              ? JSON.parse(existingWl.connection_string)
-              : (existingWl.connection_string || {});
-          } catch (_) {
-            merged = {};
-          }
+        const u = new URL(httpTrim);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+          throw new Error('invalid');
         }
-      } catch (_) { }
-
+      } catch {
+        throw new Error('Bridge HTTP URL must be a valid http(s) URL.');
+      }
       const connectionConfig = {
-        ...merged,
-        model: 'RX5000',
-        protocol: 'ctep',
-        simulate: false,
-        terminalConnectsToPos: true,
-        listenHost: '0.0.0.0',
-        port: resolvedPort,
+        httpBaseUrl: httpTrim.replace(/\/+$/, ''),
+        ctepListenPort: 9000,
       };
-      delete connectionConfig.ip;
-
-      const tplTrim = String(worldlineSaleBodyTemplate || '').trim();
-      if (tplTrim) {
-        connectionConfig.saleBodyTemplate = tplTrim;
-      } else {
-        delete connectionConfig.saleBodyTemplate;
-        delete connectionConfig.ctepSaleBody;
-        delete connectionConfig.sale_body_template;
-      }
-
-      const arTrim = String(worldlineApproveRegex || '').trim();
-      if (arTrim) connectionConfig.approveRegex = arTrim;
-      else delete connectionConfig.approveRegex;
-
-      const drTrim = String(worldlineDeclineRegex || '').trim();
-      if (drTrim) connectionConfig.declineRegex = drTrim;
-      else delete connectionConfig.declineRegex;
-
-      if (worldlineRawTcp) {
-        connectionConfig.noStxEtx = true;
-        delete connectionConfig.wrapStxEtx;
-      } else {
-        delete connectionConfig.noStxEtx;
-        delete connectionConfig.rawTcp;
-      }
-
-      if (!worldlineAppendLrc) connectionConfig.appendLrc = false;
-      else delete connectionConfig.appendLrc;
       const terminalPayload = {
-        name: String(worldlineName || '').trim() || 'Worldline Terminal',
+        name: String(worldlineName || '').trim() || 'Worldline C-TEP',
         type: 'worldline',
         connection_type: 'tcp',
         connection_string: JSON.stringify(connectionConfig),
@@ -5434,17 +5363,12 @@ export function ControlView({
       }
       if (saved?.id) setWorldlineTerminalId(saved.id);
       if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('pos_worldline', JSON.stringify({
+        localStorage.setItem('pos_worldline_ctep', JSON.stringify({
           name: terminalPayload.name,
-          port: connectionConfig.port,
-          ...(tplTrim ? { saleBodyTemplate: tplTrim } : {}),
-          ...(arTrim ? { approveRegex: arTrim } : {}),
-          ...(drTrim ? { declineRegex: drTrim } : {}),
-          rawTcp: !!worldlineRawTcp,
-          appendLrc: !!worldlineAppendLrc,
+          httpBaseUrl: connectionConfig.httpBaseUrl,
         }));
       }
-      showToast('success', 'Worldline settings saved.');
+      showToast('success', 'Worldline C-TEP settings saved.');
     } catch (err) {
       showToast('error', err?.message || 'Failed to save Worldline settings.');
     } finally {
@@ -5552,18 +5476,12 @@ export function ControlView({
 
   const worldlineKeyboardValue =
     worldlineActiveField === 'name' ? worldlineName
-      : worldlineActiveField === 'port' ? worldlinePort
-        : worldlineActiveField === 'template' ? worldlineSaleBodyTemplate
-          : worldlineActiveField === 'approveRegex' ? worldlineApproveRegex
-            : worldlineActiveField === 'declineRegex' ? worldlineDeclineRegex
-              : '';
+      : worldlineActiveField === 'http' ? worldlineHttpBaseUrl
+        : '';
 
   const worldlineKeyboardOnChange = (v) => {
     if (worldlineActiveField === 'name') setWorldlineName(v);
-    else if (worldlineActiveField === 'port') setWorldlinePort(v);
-    else if (worldlineActiveField === 'template') setWorldlineSaleBodyTemplate(v);
-    else if (worldlineActiveField === 'approveRegex') setWorldlineApproveRegex(v);
-    else if (worldlineActiveField === 'declineRegex') setWorldlineDeclineRegex(v);
+    else if (worldlineActiveField === 'http') setWorldlineHttpBaseUrl(v);
   };
 
   const bancontactProKeyboardValue =
@@ -6554,12 +6472,7 @@ export function ControlView({
           vivaKeyboardOnChange,
           vivaKeyboardValue,
           worldlineName,
-          worldlinePort,
-          worldlineSaleBodyTemplate,
-          worldlineApproveRegex,
-          worldlineDeclineRegex,
-          worldlineRawTcp,
-          worldlineAppendLrc,
+          worldlineHttpBaseUrl,
           worldlineKeyboardOnChange,
           worldlineKeyboardValue,
           ccvName,
@@ -6699,12 +6612,7 @@ export function ControlView({
           setVivaPort,
           setWorldlineActiveField,
           setWorldlineName,
-          setWorldlinePort,
-          setWorldlineSaleBodyTemplate,
-          setWorldlineApproveRegex,
-          setWorldlineDeclineRegex,
-          setWorldlineRawTcp,
-          setWorldlineAppendLrc,
+          setWorldlineHttpBaseUrl,
           setCcvActiveField,
           setCcvName,
           setCcvIpAddress,

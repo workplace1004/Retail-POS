@@ -23,9 +23,9 @@ const TERMINAL_CARD_INTEGRATIONS = new Set([
   'card',
   'payworld',
   'ccv',
-  'worldline',
   'viva',
   'viva-wallet',
+  'worldline',
   'multisafepay',
   'bancontactpro',
 ]);
