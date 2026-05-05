@@ -538,29 +538,34 @@ class WorldlineServiceInstance {
       || this.runtime.detectedPoiId
       || 'KR539577',
     );
-    const configuredSaleCommand = fillTemplate(this.config.saleTemplate, {
-      amountMinor: session.amountMinor,
-      amount: session.amountEuro.toFixed(2),
-      amountNumber: session.amountEuro.toFixed(2),
-      amountCents: session.amountMinor,
-      amountEuro: session.amountEuro.toFixed(2).replace('.', ','),
-      amountEuroDot: session.amountEuro.toFixed(2),
-      currency: this.config.currencyCode,
-      reference: session.reference,
-      merchantRef: session.reference,
-      sessionId,
-      serviceId: defaultServiceId,
-      saleId: 'POS',
-      transactionId: defaultTxnId,
-      timeStamp: nowIso,
-      timestamp: nowIso,
-      poiId: defaultPoiId,
-      POIID: defaultPoiId,
-    }) || buildCtepCommand('SALE', {
-      amountMinor: session.amountMinor,
-      currency: this.config.currencyCode,
-      merchantRef: session.reference,
-    });
+    // Build JSON payload as an object first, then stringify.
+    // This avoids malformed JSON from text-template replacement.
+    const salePayloadObj = {
+      MessageHeader: {
+        ProtocolVersion: '3.1',
+        MessageClass: 'Service',
+        MessageCategory: 'Payment',
+        MessageType: 'Request',
+        ServiceID: defaultServiceId,
+        SaleID: 'POS',
+        POIID: defaultPoiId,
+      },
+      PaymentRequest: {
+        SaleData: {
+          SaleTransactionID: {
+            TransactionID: defaultTxnId,
+            TimeStamp: nowIso,
+          },
+        },
+        PaymentTransaction: {
+          AmountsReq: {
+            Currency: this.config.currencyCode || 'EUR',
+            RequestedAmount: Number(session.amountEuro.toFixed(2)),
+          },
+        },
+      },
+    };
+    const configuredSaleCommand = JSON.stringify(salePayloadObj);
     const genericSaleCommand = buildCtepCommand('SALE', {
       amountMinor: session.amountMinor,
       currency: this.config.currencyCode,
@@ -591,19 +596,6 @@ class WorldlineServiceInstance {
       for (let i = 0; i < saleCommandCandidates.length; i += 1) {
         const candidate = saleCommandCandidates[i];
         const isFallback = i > 0;
-        if (!isFallback) {
-          const unresolved = unresolvedTemplateTokens(candidate);
-          if (unresolved.length) {
-            lastSendError = new Error(
-              `Worldline sale template has unresolved placeholders: ${unresolved.join(', ')}`,
-            );
-            wlLog('Sale template unresolved placeholders detected', {
-              unresolved,
-              preview: String(candidate).slice(0, 500),
-            });
-            continue;
-          }
-        }
         patch({
           state: 'IN_PROGRESS',
           message: isFallback
