@@ -99,11 +99,13 @@ function xorLrc(buffer) {
   return lrc & 0xff;
 }
 
-function framePayload(config, bodyUtf8) {
+function framePayload(config, bodyUtf8, transport = null) {
+  const wrapStxEtx = transport?.wrapStxEtx ?? config.wrapStxEtx;
+  const appendLrc = transport?.appendLrc ?? config.appendLrc;
   const body = Buffer.from(bodyUtf8, 'utf8');
-  if (!config.wrapStxEtx) return body;
+  if (!wrapStxEtx) return body;
   const core = Buffer.concat([Buffer.from([0x02]), body, Buffer.from([0x03])]);
-  if (!config.appendLrc) return core;
+  if (!appendLrc) return core;
   return Buffer.concat([core, Buffer.from([xorLrc(core)])]);
 }
 
@@ -214,7 +216,7 @@ class CtepRuntime {
     }
   }
 
-  async sendAndRead(command, timeoutMs) {
+  async sendAndRead(command, timeoutMs, transport = null) {
     await this.ensureStarted();
     await this.waitForTerminal(timeoutMs);
     if (!this.socket) throw new Error('No terminal connected');
@@ -227,13 +229,17 @@ class CtepRuntime {
         throw new Error(`Invalid JSON sale command: ${err?.message || String(err)}`);
       }
     }
-    const payload = framePayload(this.config, commandText);
+    const payload = framePayload(this.config, commandText, transport);
     const payloadSha1 = crypto.createHash('sha1').update(payload).digest('hex');
     wlLog('Sending C-TEP command', {
       commandPreview: commandText.slice(0, 500),
       commandLength: commandText.length,
       payloadBytes: payload.length,
       payloadSha1,
+      transport: {
+        wrapStxEtx: transport?.wrapStxEtx ?? this.config.wrapStxEtx,
+        appendLrc: transport?.appendLrc ?? this.config.appendLrc,
+      },
       timeoutMs,
     });
     this.socket.write(payload, () => {
@@ -504,6 +510,23 @@ class WorldlineServiceInstance {
     return { state: 'ERROR', message: 'Unrecognized C-TEP sale response' };
   }
 
+  getTransportCandidates() {
+    const base = {
+      wrapStxEtx: !!this.config.wrapStxEtx,
+      appendLrc: !!this.config.appendLrc,
+      label: 'configured',
+    };
+    const variants = [base];
+    const pushUnique = (v) => {
+      if (variants.some((x) => x.wrapStxEtx === v.wrapStxEtx && x.appendLrc === v.appendLrc)) return;
+      variants.push(v);
+    };
+    // Common RX5000 interoperability fallbacks.
+    pushUnique({ wrapStxEtx: true, appendLrc: false, label: 'stx-etx-no-lrc' });
+    pushUnique({ wrapStxEtx: false, appendLrc: false, label: 'raw-tcp' });
+    return variants;
+  }
+
   async processPaymentAsync(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -569,6 +592,7 @@ class WorldlineServiceInstance {
     const saleCommandCandidates = configuredSaleCommand === genericSaleCommand
       ? [configuredSaleCommand]
       : [configuredSaleCommand, genericSaleCommand];
+    const transportCandidates = this.getTransportCandidates();
     try {
       patch({
         state: 'IN_PROGRESS',
@@ -600,37 +624,44 @@ class WorldlineServiceInstance {
           });
           continue;
         }
-        patch({
-          state: 'IN_PROGRESS',
-          message: isFallback
-            ? 'Primary sale format gave no business response. Trying fallback sale format...'
-            : 'Terminal connected. Sending sale request...',
-        });
-        try {
-          sentCommandPreview = String(candidate || '').slice(0, 500);
-          // Do not fallback too early: RX5000 can stay in processing state
-          // while waiting for card/PIN and only then emits final response.
-          rawSale = await this.runtime.sendAndRead(
-            candidate,
-            Math.max(this.config.timeoutMs, this.config.saleResponseWaitMs),
-          );
-          if (rawSale) break;
-        } catch (err) {
-          lastSendError = err;
-          if (String(err?.message || '').includes('interim without final response')) {
-            forceRecovery = true;
-            wlLog('Moving to recovery after interim-only terminal flow', {
-              attempt: i + 1,
-              fallbackTried: i > 0,
-            });
-            break;
-          }
-          wlLog('Sale command attempt failed', {
-            attempt: i + 1,
-            fallback: isFallback,
-            error: err?.message || String(err),
+        for (let t = 0; t < transportCandidates.length; t += 1) {
+          const transport = transportCandidates[t];
+          patch({
+            state: 'IN_PROGRESS',
+            message: isFallback
+              ? `Trying fallback sale format (${transport.label})...`
+              : `Terminal connected. Sending sale request (${transport.label})...`,
           });
+          try {
+            sentCommandPreview = String(candidate || '').slice(0, 500);
+            // Do not fallback too early: RX5000 can stay in processing state
+            // while waiting for card/PIN and only then emits final response.
+            rawSale = await this.runtime.sendAndRead(
+              candidate,
+              Math.max(this.config.timeoutMs, this.config.saleResponseWaitMs),
+              transport,
+            );
+            if (rawSale) break;
+          } catch (err) {
+            lastSendError = err;
+            if (String(err?.message || '').includes('interim without final response')) {
+              forceRecovery = true;
+              wlLog('Moving to recovery after interim-only terminal flow', {
+                attempt: i + 1,
+                fallbackTried: i > 0,
+                transport: transport.label,
+              });
+              break;
+            }
+            wlLog('Sale command attempt failed', {
+              attempt: i + 1,
+              fallback: isFallback,
+              transport: transport.label,
+              error: err?.message || String(err),
+            });
+          }
         }
+        if (rawSale || forceRecovery) break;
       }
       if (!rawSale && !forceRecovery) {
         throw new Error(
