@@ -213,6 +213,23 @@ class CtepRuntime {
         const trimmed = String(text || '').trim();
         return /^C[ui]\b/.test(trimmed) || /^Ri\b/.test(trimmed);
       };
+      const isIgnorableControlFrame = (frame, text) => {
+        const size = frame?.length || 0;
+        if (!size) return true;
+        if (size === 1 && frame[0] === 0x06) return true; // ACK
+        // Very small non-text payloads are usually transport/control chatter.
+        if (size <= 4) {
+          const printable = String(text || '').replace(/[^\x20-\x7E]/g, '').trim();
+          if (!printable || printable.length <= 1) return true;
+        }
+        // Ignore frames that are almost entirely non-printable.
+        const asciiPrintableCount = [...String(text || '')].filter((ch) => {
+          const c = ch.charCodeAt(0);
+          return c >= 0x20 && c <= 0x7e;
+        }).length;
+        if (size <= 10 && asciiPrintableCount <= 2) return true;
+        return false;
+      };
       const acknowledgeFrame = () => {
         if (!this.socket || this.socket.destroyed) return;
         try {
@@ -245,6 +262,14 @@ class CtepRuntime {
             bumpIdle();
             return;
           }
+          if (isIgnorableControlFrame(frame, text)) {
+            wlLog('Ignoring control frame while waiting response', {
+              bytes: frame.length,
+              preview: text.slice(0, 120),
+            });
+            bumpIdle();
+            return;
+          }
           finish(resolve, frame);
         }, 900);
       };
@@ -267,6 +292,13 @@ class CtepRuntime {
             const text = deframeToText(frame);
             if (isProtocolAdviceFrame(text)) {
               wlLog('Ignoring protocol advice frame while waiting response', {
+                preview: text.slice(0, 120),
+              });
+              continue;
+            }
+            if (isIgnorableControlFrame(frame, text)) {
+              wlLog('Ignoring control frame while waiting response', {
+                bytes: frame.length,
                 preview: text.slice(0, 120),
               });
               continue;
