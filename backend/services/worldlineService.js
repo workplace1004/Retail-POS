@@ -684,7 +684,9 @@ class WorldlineServiceInstance {
         }
       }
 
-      // C++ guide equivalent: after uncertainty/timeout window, do reset + last status.
+      // C++ guide equivalent: after uncertainty, do reset + last status.
+      // Try these commands across transport variants as some RX5000 setups only
+      // answer on one framing mode.
       patch({
         state: 'IN_PROGRESS',
         message: forceRecovery
@@ -693,11 +695,46 @@ class WorldlineServiceInstance {
         details: { saleRaw: saleText.slice(0, 1200), recoveryPending: true },
       });
       await new Promise((r) => setTimeout(r, forceRecovery ? 2000 : this.config.recoveryDelayMs));
-      await this.runtime.sendAndRead(fillTemplate(this.config.resetTemplate, { reference: session.reference, sessionId }) || buildCtepCommand('RESET_TRANSACTION'), 15000).catch(() => null);
-      const rawLast = await this.runtime.sendAndRead(
-        fillTemplate(this.config.lastStatusTemplate, { reference: session.reference, sessionId }) || buildCtepCommand('LAST_TRANSACTION_STATUS'),
-        30000,
-      );
+
+      const recoveryTransports = this.getTransportCandidates();
+      const tryCommandAcrossTransports = async (command, timeoutMs, rounds = 1) => {
+        let lastErr = null;
+        for (let r = 0; r < rounds; r += 1) {
+          for (let t = 0; t < recoveryTransports.length; t += 1) {
+            const transport = recoveryTransports[t];
+            try {
+              wlLog('Recovery command attempt', {
+                round: r + 1,
+                transport: transport.label,
+                commandPreview: String(command).slice(0, 120),
+              });
+              // eslint-disable-next-line no-await-in-loop
+              const raw = await this.runtime.sendAndRead(command, timeoutMs, transport);
+              if (raw) return raw;
+            } catch (err) {
+              lastErr = err;
+              wlLog('Recovery command failed', {
+                round: r + 1,
+                transport: transport.label,
+                error: err?.message || String(err),
+              });
+            }
+          }
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r2) => setTimeout(r2, 500));
+        }
+        throw lastErr || new Error('Recovery command did not return a response');
+      };
+
+      const resetCommand =
+        fillTemplate(this.config.resetTemplate, { reference: session.reference, sessionId })
+        || buildCtepCommand('RESET_TRANSACTION');
+      await tryCommandAcrossTransports(resetCommand, 6000, 2).catch(() => null);
+
+      const lastStatusCommand =
+        fillTemplate(this.config.lastStatusTemplate, { reference: session.reference, sessionId })
+        || buildCtepCommand('LAST_TRANSACTION_STATUS');
+      const rawLast = await tryCommandAcrossTransports(lastStatusCommand, 10000, 3);
       const lastText = deframeToText(rawLast);
       wlLog('Decoded LAST_TRANSACTION_STATUS response text', { text: lastText.slice(0, 2000) });
       const recovered = this.classifyResponseText(lastText);
