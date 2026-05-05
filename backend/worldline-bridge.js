@@ -22,6 +22,7 @@ const baseConnectionConfig = {
 const service = createWorldlineService({
   connection_string: JSON.stringify({
     ...baseConnectionConfig,
+    disableBridge: true,
     bridgeUrl: '',
   }),
 });

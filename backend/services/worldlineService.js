@@ -61,7 +61,10 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const saleTemplate =
     get('saleCommandTemplate', 'saleBodyTemplate', 'ctepSaleBody', 'sale_body_template')
     || 'ACTION=SALE|amountMinor={amountMinor}|currency={currency}|merchantRef={reference}';
-  const bridgeUrl = get('bridgeUrl', 'bridge_url', 'worldlineBridgeUrl') || String(process.env.WORLDLINE_BRIDGE_URL || '').trim();
+  const disableBridge = parseBool(get('disableBridge', 'bridgeDisabled'));
+  const bridgeUrl = disableBridge
+    ? ''
+    : (get('bridgeUrl', 'bridge_url', 'worldlineBridgeUrl') || String(process.env.WORLDLINE_BRIDGE_URL || '').trim());
   const cancelTemplate =
     get('cancelCommandTemplate', 'cancelBodyTemplate', 'cancel_body_template')
     || 'ACTION=CANCEL_RETAIL|merchantRef={reference}';
@@ -89,6 +92,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     currencyCode: (get('currencyCode', 'currency') || String(defaults.currencyCode || 'EUR')).toUpperCase(),
     saleTemplate,
     bridgeUrl,
+    disableBridge,
     cancelTemplate,
     resetTemplate,
     lastStatusTemplate,
