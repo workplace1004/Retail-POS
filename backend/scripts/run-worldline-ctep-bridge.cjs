@@ -1,8 +1,8 @@
 /**
- * Same workflow as `sample/START_BRIDGE_ONLY.bat`:
- * - Java: only `sample/runtime/java/bin/java.exe` (Windows) or `.../bin/java` (other OS).
- * - cwd: `sample/backend` when that tree has the JAR, else `backend/worldline-ctep-bridge` (retail copy).
- * - Classpath, library path, main class, ports: same as the batch file (ports overridable via env).
+ * Worldline C-TEP Java bridge — **backend only** (no `../sample/` at runtime).
+ * - Portable JRE: `backend/runtime/java/bin/java.exe` (or `.../bin/java`).
+ * - Bridge libs + class: `backend/worldline-ctep-bridge/` (copy from vendor / reference package into this tree).
+ * - Same JVM args as the reference START_BRIDGE_ONLY flow: library path, classpath, main class, ports.
  */
 'use strict';
 
@@ -11,21 +11,21 @@ const fs = require('fs');
 const path = require('path');
 
 const retailRoot = path.join(__dirname, '..');
-const sampleRoot = path.join(retailRoot, '..', 'sample');
 const bundledBridge = path.join(retailRoot, 'worldline-ctep-bridge');
-const sampleBridge = path.join(sampleRoot, 'backend');
+const jarBundled = path.join(bundledBridge, 'lib', 'JEasyCTEP-3.4.0.jar');
 
 function pickBridgeDir() {
-  const jarSample = path.join(sampleBridge, 'lib', 'JEasyCTEP-3.4.0.jar');
-  if (fs.existsSync(jarSample)) return sampleBridge;
-  const jarBundled = path.join(bundledBridge, 'lib', 'JEasyCTEP-3.4.0.jar');
   if (fs.existsSync(jarBundled)) return bundledBridge;
-  return sampleBridge;
+  console.error(
+    '[worldline-bridge] Missing %s — copy `lib/` (JEasyCTEP JAR + native DLLs) and bridge class files into backend/worldline-ctep-bridge/.',
+    jarBundled,
+  );
+  process.exit(1);
 }
 
-/** Portable JRE only — no JAVA_HOME, no `java` on PATH (matches sample). */
+/** Portable JRE under backend only — no system JDK / JAVA_HOME required for this launcher. */
 function resolvePortableJavaExe() {
-  const binDir = path.join(sampleRoot, 'runtime', 'java', 'bin');
+  const binDir = path.join(retailRoot, 'runtime', 'java', 'bin');
   const win = path.join(binDir, 'java.exe');
   const nix = path.join(binDir, 'java');
   if (process.platform === 'win32' && fs.existsSync(win)) return win;
@@ -41,9 +41,11 @@ const httpPort = String(process.env.WORLDLINE_CTEP_HTTP_PORT || '3210');
 const javaExe = resolvePortableJavaExe();
 
 if (!javaExe) {
-  const expected = path.join(sampleRoot, 'runtime', 'java', 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-  console.error('[worldline-bridge] Portable Java ontbreekt: %s', expected);
-  console.error('[worldline-bridge] Draai eerst INSTALL_PORTABLE_JAVA.bat in de sample-hoofdmap (zie sample/README_PORTABLE_JAVA_NL.txt).');
+  const expected = path.join(retailRoot, 'runtime', 'java', 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+  console.error('[worldline-bridge] Portable Java missing: %s', expected);
+  console.error(
+    '[worldline-bridge] Copy a Java 17 x64 JRE into backend/runtime/java so that bin/java.exe exists (same folder layout as a full JRE).',
+  );
   process.exit(1);
 }
 

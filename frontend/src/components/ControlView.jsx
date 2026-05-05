@@ -5320,7 +5320,7 @@ export function ControlView({
     try {
       const httpTrim = String(worldlineHttpBaseUrl || '').trim();
       if (!httpTrim) {
-        throw new Error('Bridge HTTP URL is required (same as sample, e.g. http://127.0.0.1:3210).');
+        throw new Error('Bridge HTTP URL is required (e.g. http://127.0.0.1:3210).');
       }
       try {
         const u = new URL(httpTrim);

@@ -13,9 +13,43 @@ export function normalizeHttpBaseUrl(url) {
     .replace(/\/+$/, '');
 }
 
-export async function ctepStatus(baseUrl) {
+/** Node/undici often surfaces refused connections as `fetch failed` with little context. */
+function isBridgeConnectionFailure(err) {
+  const code = err?.cause?.code || err?.code;
+  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ECONNRESET') {
+    return true;
+  }
+  const m = String(err?.message || err || '');
+  if (m === 'fetch failed' || /failed to fetch/i.test(m)) return true;
+  return false;
+}
+
+function bridgeUnreachableError(baseUrl, err) {
+  const e = new Error(
+    `Worldline bridge not reachable at ${baseUrl}. `
+    + 'Start the Java bridge (HTTP on this URL, default port 3210). '
+    + 'From the backend folder: `npm run dev` starts API + bridge, or run `npm run worldline-bridge` alone. '
+    + 'The launcher needs portable Java under `backend/runtime/java` (copy a Java 17 x64 JRE there so `bin/java.exe` exists).',
+  );
+  e.cause = err;
+  return e;
+}
+
+async function fetchJson(baseUrl, path, init) {
   const base = normalizeHttpBaseUrl(baseUrl);
-  const res = await fetch(`${base}/status`);
+  const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+  let res;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    if (isBridgeConnectionFailure(err)) throw bridgeUnreachableError(base, err);
+    throw err;
+  }
+  return res;
+}
+
+export async function ctepStatus(baseUrl) {
+  const res = await fetchJson(baseUrl, '/status');
   return res.json();
 }
 
@@ -39,7 +73,7 @@ export async function startCtepSale(baseUrl, amount, reference, timeoutSec = 180
     throw new Error('Er loopt al een transactie');
   }
 
-  const res = await fetch(`${base}/sale`, {
+  const res = await fetchJson(base, '/sale', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ amount, reference, timeoutSec }),
@@ -54,7 +88,7 @@ export async function startCtepSale(baseUrl, amount, reference, timeoutSec = 180
     // eslint-disable-next-line no-await-in-loop
     await sleep(pollMs);
     // eslint-disable-next-line no-await-in-loop
-    const txRes = await fetch(`${base}/transaction`);
+    const txRes = await fetchJson(base, '/transaction');
     // eslint-disable-next-line no-await-in-loop
     const tx = await txRes.json();
     if (tx.status && tx.status !== 'running') return tx;
@@ -62,13 +96,11 @@ export async function startCtepSale(baseUrl, amount, reference, timeoutSec = 180
 }
 
 export async function ctepCancel(baseUrl) {
-  const base = normalizeHttpBaseUrl(baseUrl);
-  const res = await fetch(`${base}/cancel`, { method: 'POST' });
+  const res = await fetchJson(baseUrl, '/cancel', { method: 'POST' });
   return res.json().catch(() => ({}));
 }
 
 export async function ctepPing(baseUrl) {
-  const base = normalizeHttpBaseUrl(baseUrl);
-  const res = await fetch(`${base}/ping`);
+  const res = await fetchJson(baseUrl, '/ping');
   return res.json();
 }

@@ -1,11 +1,10 @@
 @echo off
 cd /d "%~dp0"
 title Worldline C-TEP Bridge (retail) - Portable Java
-set "ROOT=%~dp0..\.."
-set "JAVA_EXE=%ROOT%\sample\runtime\java\bin\java.exe"
+set "JAVA_EXE=%~dp0..\runtime\java\bin\java.exe"
 if not exist "%JAVA_EXE%" (
   echo Portable Java ontbreekt: %JAVA_EXE%
-  echo Draai eerst INSTALL_PORTABLE_JAVA.bat in de sample-hoofdmap ^(zie sample\README_PORTABLE_JAVA_NL.txt^).
+  echo Kopieer een Java 17 x64 JRE naar backend\runtime\java ^(bin\java.exe moet bestaan^).
   pause
   exit /b 1
 )

@@ -1,17 +1,17 @@
-# Worldline C-TEP Java bridge (same as `sample/`)
+# Worldline C-TEP Java bridge (under `backend/` only)
 
-This folder mirrors the **sample** Worldline integration:
+Self-contained under **`backend/worldline-ctep-bridge`** — no separate `sample/` folder is required at runtime.
 
 - **Java** `WorldlineCtepBrowserBridge` (JEasyCTEP) listens for the terminal on **C-TEP** (default port **9000**).
 - **HTTP** API for the POS on default port **3210** (`/status`, `POST /sale`, `GET /transaction`, …).
-- **Node** in the retail app calls the same flow as `POS_INTEGRATION_EXAMPLE_JS.js` via `backend/services/worldlineCtepBridgeClient.js`.
+- **Node** calls the same HTTP contract via `backend/services/worldlineCtepBridgeClient.js`.
 
 ## Files
 
-- `lib/` — JEasyCTEP JAR and native DLLs (copied from `sample/backend/lib` in this repo).
-- `WorldlineCtepBrowserBridge.class` — precompiled bridge (from sample).
-- `WorldlineCtepBrowserBridge.java` — source (from sample).
-- `POS_INTEGRATION_EXAMPLE_JS.js` — reference client (from sample).
+- `lib/` — JEasyCTEP JAR and native DLLs (copy from your vendor / integration package into this folder).
+- `WorldlineCtepBrowserBridge.class` — precompiled bridge.
+- `WorldlineCtepBrowserBridge.java` — source reference.
+- `POS_INTEGRATION_EXAMPLE_JS.js` — reference client (HTTP shapes).
 
 ## Run the bridge (Windows)
 
@@ -27,13 +27,13 @@ Or from `backend`:
 npm run worldline-bridge
 ```
 
-Uses **only** portable Java at `sample/runtime/java/bin/java.exe` (same as `sample/START_BRIDGE_ONLY.bat`). Run `sample/INSTALL_PORTABLE_JAVA.bat` once if that path is missing; no JDK install or `JAVA_HOME` required.
+Uses **only** portable Java at **`backend/runtime/java/bin/java.exe`** (JRE tree copied next to `worldline-ctep-bridge`). No global JDK or `JAVA_HOME` required for this launcher.
 
 ## Configure the POS
 
 Control → External devices → Card → **Worldline** → set **Bridge HTTP base URL** to `http://127.0.0.1:3210` (or your `--http-port`).
 
-On the terminal, point C-TEP to **this PC’s LAN IP** and port **9000** (same as sample).
+On the terminal, point C-TEP to **this PC’s LAN IP** and port **9000**.
 
 ## Environment (optional)
 

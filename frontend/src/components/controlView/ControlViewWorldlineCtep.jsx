@@ -2,8 +2,8 @@ import React from 'react';
 import { SmallKeyboardWithNumpad } from '../SmallKeyboardWithNumpad';
 
 /**
- * Settings for Worldline C-TEP via the Java browser bridge (same stack as `sample/`).
- * Terminal → PC IP :9000 (C-TEP). POS Node → bridge HTTP :3210 (see sample POS_INTEGRATION_EXAMPLE_JS.js).
+ * Settings for Worldline C-TEP via the Java browser bridge (`backend/worldline-ctep-bridge`).
+ * Terminal → PC IP :9000 (C-TEP). POS Node → bridge HTTP :3210.
  */
 export function ControlViewWorldlineCtep({
   tr,
@@ -24,7 +24,7 @@ export function ControlViewWorldlineCtep({
           <p className="rounded-lg border border-pos-border bg-pos-bg/80 px-3 py-2 text-xs text-pos-muted">
             {tr(
               'control.worldlineCtep.hint',
-              'Run the Java bridge from the repo (sample or backend/worldline-ctep-bridge). Terminal must connect to this PC on C-TEP port 9000; set the HTTP URL below to match the bridge (default http://127.0.0.1:3210).',
+              'Run the Java bridge from backend (npm run dev or npm run worldline-bridge). Put portable Java under backend/runtime/java and bridge files under backend/worldline-ctep-bridge. Terminal must use this PC\'s IP on C-TEP port 9000; set the HTTP URL below (default http://127.0.0.1:3210).',
             )}
           </p>
           <div className="grid grid-cols-2 gap-10">

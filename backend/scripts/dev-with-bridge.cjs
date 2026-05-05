@@ -51,8 +51,12 @@ console.log('[dev-with-bridge] Starting Worldline C-TEP bridge + API (WORLDLINE_
 const bridgeChild = start('worldline-ctep-bridge', process.execPath, [bridgeScript]);
 bridgeChild.on('exit', (code, signal) => {
   if (shuttingDown) return;
+  const portableHint =
+    'Portable JRE must exist at backend/runtime/java (copy a Java 17 x64 JRE tree there; see worldline-ctep-bridge/README.md).';
   console.error(
-    `[dev-with-bridge] Bridge process stopped (code=${code}, signal=${signal || 'none'}). API keeps running. Ensure Java + JAR (see worldline-ctep-bridge/README) or run: npm run worldline-bridge`,
+    `[dev-with-bridge] Bridge process stopped (code=${code}, signal=${signal || 'none'}). `
+    + `Payments to http://127.0.0.1:3210 will fail until the bridge runs. ${portableHint} `
+    + 'Or run: npm run worldline-bridge',
   );
 });
 
