@@ -74,7 +74,7 @@ export function ControlViewWorldline({
                 onChange={(e) => setWorldlinePort(e.target.value)}
                 onFocus={() => setWorldlineActiveField('port')}
                 onClick={() => setWorldlineActiveField('port')}
-                placeholder={tr('control.worldline.listenPortPlaceholder', '9001')}
+                placeholder={tr('control.worldline.listenPortPlaceholder', '9000')}
                 className="h-[40px] w-[200px] rounded-lg border border-gray-300 bg-pos-panel px-3 text-gray-200 placeholder-pos-muted focus:border-green-500 focus:outline-none"
               />
             </div>

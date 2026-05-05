@@ -203,25 +203,49 @@ class CtepRuntime {
     if (!this.socket) throw new Error('No terminal connected');
     if (this.pending) throw new Error('Another C-TEP command is in progress');
     const payload = framePayload(this.config, command);
+    wlLog('Sending C-TEP command', { command: String(command).slice(0, 500), timeoutMs });
     this.socket.write(payload);
 
     return new Promise((resolve, reject) => {
       let done = false;
+      let idleTimer = null;
       const finish = (fn, value) => {
         if (done) return;
         done = true;
         if (timer) clearTimeout(timer);
+        if (idleTimer) clearTimeout(idleTimer);
         this.pending = null;
         fn(value);
+      };
+      const bumpIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          if (!this.socketBuffer.length) return;
+          const frame = this.socketBuffer;
+          this.socketBuffer = Buffer.alloc(0);
+          wlLog('Received idle-delimited C-TEP response', { bytes: frame.length });
+          finish(resolve, frame);
+        }, 900);
       };
       const readNow = () => {
         const buf = this.socketBuffer;
         if (!buf.length) return;
+        // Ignore a standalone ACK frame and wait for the business response.
+        if (buf.length === 1 && buf[0] === 0x06) {
+          this.socketBuffer = Buffer.alloc(0);
+          bumpIdle();
+          return;
+        }
         const etxAt = buf.indexOf(0x03);
-        if (etxAt < 0) return;
-        const frame = buf.slice(0, etxAt + 1);
-        this.socketBuffer = buf.slice(etxAt + 1);
-        finish(resolve, frame);
+        if (etxAt >= 0) {
+          const frame = buf.slice(0, etxAt + 1);
+          this.socketBuffer = buf.slice(etxAt + 1);
+          wlLog('Received ETX-delimited C-TEP response', { bytes: frame.length });
+          finish(resolve, frame);
+          return;
+        }
+        // Some terminals/dialects return plain text without ETX.
+        bumpIdle();
       };
       const timer = setTimeout(() => {
         finish(reject, new Error('C-TEP command timeout'));
@@ -307,6 +331,12 @@ class WorldlineServiceInstance {
   async processPaymentAsync(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    const patch = (values) => {
+      const cur = this.sessions.get(sessionId);
+      if (!cur) return;
+      Object.assign(cur, values);
+      this.sessions.set(sessionId, cur);
+    };
     const finish = (patch) => {
       const cur = this.sessions.get(sessionId);
       if (!cur) return;
@@ -337,8 +367,23 @@ class WorldlineServiceInstance {
       merchantRef: session.reference,
     });
     try {
+      patch({
+        state: 'IN_PROGRESS',
+        message: `Starting C-TEP service on ${this.config.listenHost}:${this.config.listenPort}...`,
+      });
+      await this.runtime.ensureStarted();
+      patch({
+        state: 'IN_PROGRESS',
+        message: `Waiting for terminal connection on ${this.config.listenHost}:${this.config.listenPort}...`,
+      });
+      await this.runtime.waitForTerminal(this.config.timeoutMs);
+      patch({
+        state: 'IN_PROGRESS',
+        message: 'Terminal connected. Sending sale request...',
+      });
       const rawSale = await this.runtime.sendAndRead(saleCommand, this.config.timeoutMs);
       const saleText = deframeToText(rawSale);
+      patch({ message: 'Sale response received. Validating status...' });
       const classified = this.classifyResponseText(saleText);
       if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
         finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
@@ -346,6 +391,11 @@ class WorldlineServiceInstance {
       }
 
       // C++ guide equivalent: after uncertainty/timeout window, do reset + last status.
+      patch({
+        state: 'IN_PROGRESS',
+        message: 'Sale status uncertain. Starting recovery (reset + last transaction status)...',
+        details: { saleRaw: saleText.slice(0, 1200), recoveryPending: true },
+      });
       await new Promise((r) => setTimeout(r, this.config.recoveryDelayMs));
       await this.runtime.sendAndRead(fillTemplate(this.config.resetTemplate, { reference: session.reference, sessionId }) || buildCtepCommand('RESET_TRANSACTION'), 15000).catch(() => null);
       const rawLast = await this.runtime.sendAndRead(
