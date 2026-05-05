@@ -6,7 +6,7 @@
  */
 'use strict';
 
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -22,6 +22,56 @@ function pickBridgeDir() {
   return bundledBridge;
 }
 
+function resolveJavaFromPathProbe() {
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('where.exe', ['java'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const lines = out.trim().split(/\r?\n/).filter(Boolean);
+      const first = lines[0] ? lines[0].trim() : '';
+      if (first && fs.existsSync(first)) return first;
+    } else {
+      const out = execFileSync('which', ['java'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      const p = out.trim().split('\n')[0];
+      if (p && fs.existsSync(p)) return p;
+    }
+  } catch {
+    // not on PATH
+  }
+  return null;
+}
+
+/** Best-effort: Adoptium, Microsoft, Corretto, Zulu under Program Files */
+function findJavaUnderWindowsProgramFiles() {
+  if (process.platform !== 'win32') return null;
+  const bases = [process.env['ProgramFiles'], process.env['ProgramFiles(x86)']].filter(Boolean);
+  const vendors = ['Eclipse Adoptium', 'Microsoft', 'Amazon Corretto', 'Zulu', 'Java'];
+  for (const base of bases) {
+    for (const vendor of vendors) {
+      const dir = path.join(base, vendor);
+      if (!fs.existsSync(dir)) continue;
+      let entries;
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const ent of entries) {
+        if (!ent.isDirectory()) continue;
+        const javaExe = path.join(dir, ent.name, 'bin', 'java.exe');
+        if (fs.existsSync(javaExe)) return javaExe;
+      }
+    }
+  }
+  return null;
+}
+
 function findJavaExe() {
   const candidates = [];
   const portable = path.join(retailRoot, '..', 'sample', 'runtime', 'java', 'bin', 'java.exe');
@@ -31,15 +81,17 @@ function findJavaExe() {
     candidates.push(path.join(process.env.JAVA_HOME, 'bin', 'java.exe'));
     candidates.push(path.join(process.env.JAVA_HOME, 'bin', 'java'));
   }
-  candidates.push('java');
   for (const c of candidates) {
-    if (c === 'java') return c;
     try {
       if (fs.existsSync(c)) return c;
     } catch {
       // ignore
     }
   }
+  const winJava = findJavaUnderWindowsProgramFiles();
+  if (winJava) return winJava;
+  const fromPath = resolveJavaFromPathProbe();
+  if (fromPath) return fromPath;
   return 'java';
 }
 
@@ -73,6 +125,18 @@ const child = spawn(javaExe, args, {
     PATH: `${libPath}${path.delimiter}${process.env.PATH || ''}`,
   },
   windowsHide: false,
+});
+
+child.on('error', (err) => {
+  if (err && err.code === 'ENOENT') {
+    console.error(
+      '[worldline-bridge] Java executable not found (ENOENT). Install a JDK (17+), add it to PATH, or set JAVA_HOME to the JDK folder.',
+    );
+    console.error('[worldline-bridge] Tried:', javaExe);
+  } else {
+    console.error('[worldline-bridge] Failed to start Java:', err && err.message ? err.message : err);
+  }
+  process.exit(1);
 });
 
 child.on('exit', (code, signal) => {
