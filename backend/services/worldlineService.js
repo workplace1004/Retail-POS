@@ -1,5 +1,11 @@
 import net from 'net';
 import crypto from 'crypto';
+import {
+  normalizeSyncBaseUrl,
+  syncCancelPayment,
+  syncStartPayment,
+  syncWaitForPayment,
+} from './worldlineBridgeService.js';
 
 const sharedSessions = new Map();
 const sharedRuntimes = new Map();
@@ -49,7 +55,6 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const timeoutMs = Number.parseInt(get('timeoutMs', 'timeout') || String(defaults.timeoutMs || 180000), 10);
   const recoveryDelayMs = Number.parseInt(get('recoveryDelayMs') || '100000', 10);
   const saleResponseWaitMs = Number.parseInt(get('saleResponseWaitMs') || '180000', 10);
-  const bridgeTimeoutMs = Number.parseInt(get('bridgeTimeoutMs', 'bridge_timeout_ms') || '240000', 10);
   const heartbeatMs = Number.parseInt(get('heartbeatMs') || '12000', 10);
   const merchantRefPrefix = get('merchantRefPrefix') || 'POS';
   const rawTcpEnabled = parseBool(get('rawTcp', 'noStxEtx'));
@@ -61,10 +66,30 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const saleTemplate =
     get('saleCommandTemplate', 'saleBodyTemplate', 'ctepSaleBody', 'sale_body_template')
     || 'ACTION=SALE|amountMinor={amountMinor}|currency={currency}|merchantRef={reference}';
-  const disableBridge = parseBool(get('disableBridge', 'bridgeDisabled'));
-  const bridgeUrl = disableBridge
-    ? ''
-    : (get('bridgeUrl', 'bridge_url', 'worldlineBridgeUrl') || String(process.env.WORLDLINE_BRIDGE_URL || '').trim());
+  const bridgeUrl = get('bridgeUrl', 'bridge_url', 'worldlineBridgeUrl') || String(process.env.WORLDLINE_BRIDGE_URL || '').trim();
+  const syncServiceUrl =
+    get('syncServiceUrl', 'sync_service_url') || String(process.env.WORLDLINE_SYNC_SERVICE_URL || '').trim();
+  const syncPaymentStartPath =
+    get('syncPaymentStartPath', 'sync_payment_start_path')
+    || String(process.env.WORLDLINE_SYNC_START_PATH || '').trim()
+    || '/payment';
+  const syncPaymentStatusPathTemplate =
+    get('syncPaymentStatusPath', 'sync_payment_status_path', 'syncPaymentStatusPathTemplate')
+    || String(process.env.WORLDLINE_SYNC_STATUS_PATH || '').trim()
+    || '/payment/{sessionId}';
+  const syncCancelPathTemplate =
+    get('syncCancelPath', 'sync_cancel_path')
+    || String(process.env.WORLDLINE_SYNC_CANCEL_PATH || '').trim()
+    || '/payment/{sessionId}/cancel';
+  const syncPollMsRaw = Number.parseInt(
+    get('syncPollMs', 'sync_poll_ms') || String(process.env.WORLDLINE_SYNC_POLL_MS || '1000'),
+    10,
+  );
+  const syncWaitTimeoutMsRaw = Number.parseInt(
+    get('syncWaitTimeoutMs', 'sync_wait_timeout_ms')
+      || String(process.env.WORLDLINE_SYNC_WAIT_MS || ''),
+    10,
+  );
   const cancelTemplate =
     get('cancelCommandTemplate', 'cancelBodyTemplate', 'cancel_body_template')
     || 'ACTION=CANCEL_RETAIL|merchantRef={reference}';
@@ -83,7 +108,6 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180000,
     recoveryDelayMs: Number.isFinite(recoveryDelayMs) && recoveryDelayMs > 0 ? recoveryDelayMs : 100000,
     saleResponseWaitMs: Number.isFinite(saleResponseWaitMs) && saleResponseWaitMs > 0 ? saleResponseWaitMs : 180000,
-    bridgeTimeoutMs: Number.isFinite(bridgeTimeoutMs) && bridgeTimeoutMs > 0 ? bridgeTimeoutMs : 240000,
     heartbeatMs: Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : 12000,
     merchantRefPrefix,
     wrapStxEtx,
@@ -92,7 +116,15 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     currencyCode: (get('currencyCode', 'currency') || String(defaults.currencyCode || 'EUR')).toUpperCase(),
     saleTemplate,
     bridgeUrl,
-    disableBridge,
+    syncServiceUrl,
+    syncPaymentStartPath,
+    syncPaymentStatusPathTemplate,
+    syncCancelPathTemplate,
+    syncPollMs: Number.isFinite(syncPollMsRaw) && syncPollMsRaw > 0 ? syncPollMsRaw : 1000,
+    syncWaitTimeoutMs:
+      Number.isFinite(syncWaitTimeoutMsRaw) && syncWaitTimeoutMsRaw > 0
+        ? syncWaitTimeoutMsRaw
+        : Math.max(timeoutMs, 120000),
     cancelTemplate,
     resetTemplate,
     lastStatusTemplate,
@@ -126,13 +158,6 @@ function deframeToText(raw) {
   const utf8 = payload.toString('utf8');
   if (!utf8.includes('\uFFFD')) return utf8;
   return payload.toString('binary');
-}
-
-function hasInterimProcessingSignature(buffer) {
-  if (!buffer || !buffer.length) return false;
-  const mc = Buffer.from([0x4d, 0x43]); // "MC"
-  const tlv = Buffer.from([0xdf, 0x2d, 0x02, 0x00, 0x02]); // observed pending/status marker
-  return buffer.indexOf(mc) >= 0 && buffer.indexOf(tlv) >= 0;
 }
 
 function buildCtepCommand(action, fields = {}) {
@@ -297,7 +322,16 @@ class CtepRuntime {
         if (size <= 10 && asciiPrintableCount <= 2) return true;
         return false;
       };
-      const isInterimProcessingFrame = (frame) => hasInterimProcessingSignature(frame);
+      const isInterimProcessingFrame = (frame) => {
+        const size = frame?.length || 0;
+        if (size < 6) return false;
+        // Common C-TEP interim status observed on RX5000:
+        // starts with "MC" and contains TLV DF2D020002 (status "processing/pending").
+        const startsMc = frame[0] === 0x4d && frame[1] === 0x43; // "MC"
+        if (!startsMc) return false;
+        const tlv = Buffer.from([0xdf, 0x2d, 0x02, 0x00, 0x02]);
+        return frame.indexOf(tlv) >= 0;
+      };
       const acknowledgeFrame = () => {
         if (!this.socket || this.socket.destroyed) return;
         try {
@@ -557,11 +591,97 @@ class WorldlineServiceInstance {
       return;
     }
 
+    if (this.config.syncServiceUrl) {
+      const base = normalizeSyncBaseUrl(this.config.syncServiceUrl);
+      if (!base) {
+        finish({
+          state: 'ERROR',
+          message: 'Worldline Sync Service URL is empty or invalid (syncServiceUrl / WORLDLINE_SYNC_SERVICE_URL).',
+          details: { sync: true },
+        });
+        return;
+      }
+      try {
+        patch({
+          state: 'IN_PROGRESS',
+          message: 'Starting payment via Worldline Sync Service...',
+        });
+        const startOpts = {
+          startPath: this.config.syncPaymentStartPath || '/payment',
+          requestTimeoutMs: Math.min(60000, this.config.syncWaitTimeoutMs || 120000),
+        };
+        const { vendorSessionId, raw: startRaw } = await syncStartPayment(
+          base,
+          {
+            amount: session.amountEuro,
+            currency: this.config.currencyCode || 'EUR',
+            merchantRef: session.reference,
+            sessionId,
+          },
+          startOpts,
+        );
+        patch({
+          vendorSyncSessionId: vendorSessionId,
+          message: 'Waiting for terminal result...',
+          details: { sync: true, startRaw },
+        });
+        const waitOpts = {
+          timeoutMs: this.config.syncWaitTimeoutMs || 120000,
+          pollMs: this.config.syncPollMs || 1000,
+          statusPathTemplate: this.config.syncPaymentStatusPathTemplate || '/payment/{sessionId}',
+          requestTimeoutMs: Math.min(45000, this.config.syncWaitTimeoutMs || 120000),
+        };
+        const { state: outcome, raw } = await syncWaitForPayment(base, vendorSessionId, waitOpts);
+        if (outcome === 'APPROVED') {
+          finish({
+            state: 'APPROVED',
+            message: String(raw?.message || 'Payment approved (Sync Service).'),
+            details: { sync: true, data: raw },
+          });
+          return;
+        }
+        if (outcome === 'DECLINED') {
+          finish({
+            state: 'DECLINED',
+            message: String(raw?.message || 'Payment declined (Sync Service).'),
+            details: { sync: true, data: raw },
+          });
+          return;
+        }
+        if (outcome === 'CANCELLED') {
+          finish({
+            state: 'CANCELLED',
+            message: String(raw?.message || 'Payment cancelled (Sync Service).'),
+            details: { sync: true, data: raw },
+          });
+          return;
+        }
+        finish({
+          state: 'ERROR',
+          message: String(raw?.message || `Unexpected Sync Service state: ${outcome}`),
+          details: { sync: true, data: raw },
+        });
+      } catch (err) {
+        const msg = String(err?.message || err || 'Sync Service request failed');
+        const isAbort = String(err?.name || '').toLowerCase() === 'aborterror';
+        const hint = isAbort
+          ? 'Sync Service request timed out. Confirm the service is running and the URL/port match your installation.'
+          : 'Could not reach Sync Service. Confirm WORLDLINE_SYNC_SERVICE_URL / syncServiceUrl and that the process is listening.';
+        wlLog('Sync Service payment failed', { base, error: msg, hint });
+        finish({
+          state: 'ERROR',
+          message: `${hint} (${msg})`,
+          details: { sync: true, base, error: msg },
+        });
+      }
+      return;
+    }
+
     if (this.config.bridgeUrl) {
       try {
         patch({ state: 'IN_PROGRESS', message: 'Processing payment via Worldline bridge...' });
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), this.config.bridgeTimeoutMs || 240000);
+        const timeout = setTimeout(() => controller.abort(), 15000);
         const res = await fetch(this.config.bridgeUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -621,7 +741,7 @@ class WorldlineServiceInstance {
         const msg = String(err?.message || err || 'Bridge request failed');
         const isAbort = String(err?.name || '').toLowerCase() === 'aborterror';
         const hint = isAbort
-          ? `Bridge request timed out (${Math.round((this.config.bridgeTimeoutMs || 240000) / 1000)}s). Verify bridge service is running and responsive.`
+          ? 'Bridge request timed out (15s). Verify bridge service is running and responsive.'
           : 'Could not reach bridge service. Verify bridge process is running and URL/port are correct.';
         wlLog('Bridge request failed', {
           bridgeUrl: this.config.bridgeUrl,
@@ -757,24 +877,16 @@ class WorldlineServiceInstance {
       }
       let saleText = '';
       if (rawSale) {
-        if (hasInterimProcessingSignature(rawSale)) {
-          forceRecovery = true;
-          wlLog('SALE response contains interim-processing signature; switching to recovery', {
-            bytes: rawSale.length,
-          });
-        }
         saleText = deframeToText(rawSale);
         wlLog('Decoded SALE response text', {
           text: saleText.slice(0, 2000),
           commandPreview: sentCommandPreview,
         });
-        if (!forceRecovery) {
-          patch({ message: 'Sale response received. Validating status...' });
-          const classified = this.classifyResponseText(saleText);
-          if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
-            finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
-            return;
-          }
+        patch({ message: 'Sale response received. Validating status...' });
+        const classified = this.classifyResponseText(saleText);
+        if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
+          finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
+          return;
         }
       }
 
@@ -891,6 +1003,18 @@ class WorldlineServiceInstance {
     session.state = 'CANCELLED';
     session.message = 'Cancellation requested...';
     this.sessions.set(sessionId, session);
+    if (this.config.syncServiceUrl && session.vendorSyncSessionId) {
+      try {
+        await syncCancelPayment(
+          normalizeSyncBaseUrl(this.config.syncServiceUrl),
+          session.vendorSyncSessionId,
+          { cancelPathTemplate: this.config.syncCancelPathTemplate },
+        );
+      } catch {
+        // best effort
+      }
+      return { success: true, message: 'Payment cancelled.' };
+    }
     if (this.config.bridgeUrl) {
       try {
         await fetch(this.config.bridgeUrl, {

@@ -2331,6 +2331,9 @@ function summarizeWorldlineConnection(connectionString) {
     const p = JSON.parse(raw);
     const tpl = p.saleBodyTemplate || p.ctepSaleBody || p.sale_body_template || '';
     const bridge = String(p.bridgeUrl || p.bridge_url || process.env.WORLDLINE_BRIDGE_URL || '').trim();
+    const syncUrl = String(
+      p.syncServiceUrl || p.sync_service_url || process.env.WORLDLINE_SYNC_SERVICE_URL || '',
+    ).trim();
     return {
       configured: true,
       listenHost: p.listenHost || p.listen_host || '0.0.0.0',
@@ -2338,6 +2341,7 @@ function summarizeWorldlineConnection(connectionString) {
       hasSaleBodyTemplate: String(tpl).trim().length > 0,
       simulate: !!(p.simulate || String(process.env.WORLDLINE_SIMULATE || '').trim() === '1'),
       hasBridgeUrl: bridge.length > 0,
+      hasSyncServiceUrl: syncUrl.length > 0,
       currencyCode: p.currencyCode || p.currency || '',
       timeoutMs: p.timeoutMs || p.timeout || '',
     };
