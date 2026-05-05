@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import { useLanguage } from './contexts/LanguageContext';
 import { Header } from './components/Header';
@@ -23,6 +23,12 @@ import { POS_API_PREFIX as API, POS_SOCKET_ORIGIN } from './lib/apiOrigin.js';
 import { isLicenseEnforcementEnabled, runStartupLicenseCheck } from './lib/posWebLicense.js';
 import { OPTION_LAYOUT_POLL_MS, POS_DEVICE_SETTINGS_CHANGED_EVENT } from './lib/optionButtonLayout.ts';
 import { setPosTerminalToken, posTerminalAuthHeaders } from './lib/posTerminalSession.js';
+import { buildCustomerDisplayTicketPayload } from './lib/customerDisplayTicketPayload.js';
+import {
+  useCustomerDisplayOrderPublisher,
+  useCustomerDisplayWindowLifecycle,
+  useExtendPriceDisplayEnabled,
+} from './hooks/useCustomerDisplayOrderSync.js';
 
 const USER_STORAGE_KEY = 'pos-user';
 const VIEW_STORAGE_KEY = 'pos-view';
@@ -189,6 +195,20 @@ export default function App() {
     appendSubproductNoteToItem,
     findProductByBarcode
   } = usePos(API, socket, focusedOrderId);
+
+  const extendPriceDisplay = useExtendPriceDisplayEnabled();
+  const customerDisplayTicketPayload = useMemo(
+    () => buildCustomerDisplayTicketPayload(currentOrder),
+    [currentOrder]
+  );
+  useCustomerDisplayOrderPublisher({
+    enabled: Boolean(user) && extendPriceDisplay,
+    payload: customerDisplayTicketPayload,
+  });
+  useCustomerDisplayWindowLifecycle({
+    userPresent: Boolean(user),
+    extendEnabled: extendPriceDisplay,
+  });
 
   const handleMenuCatalogRefresh = useCallback(
     (categoryIds) => {
@@ -431,6 +451,22 @@ export default function App() {
     } catch { }
   };
 
+  const requestApplicationExit = useCallback(() => {
+    try {
+      if (typeof window !== 'undefined' && window.posElectronApp?.quit) {
+        window.posElectronApp.quit();
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      window.close();
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   const handleLogout = () => {
     setUser(null);
     posSessionBootstrappedRef.current = false;
@@ -626,6 +662,7 @@ export default function App() {
       <LoginScreen
         time={time}
         onLogin={handleLogin}
+        onExitApplication={requestApplicationExit}
       />
     );
   }

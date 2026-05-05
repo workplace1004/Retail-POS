@@ -1,26 +1,15 @@
 import net from 'net';
 
 const sharedSessions = new Map();
+const sharedRuntimes = new Map();
 
 function wlLog(message, data) {
   const ts = new Date().toISOString();
   if (data === undefined) {
-    console.log(`[${ts}] [worldline] ${message}`);
+    console.log(`[${ts}] [worldline-ctep] ${message}`);
     return;
   }
-  console.log(`[${ts}] [worldline] ${message}`, data);
-}
-
-function previewText(value, max = 400) {
-  const s = String(value ?? '');
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
-function previewHex(buffer, maxBytes = 96) {
-  if (!buffer || !Buffer.isBuffer(buffer)) return '';
-  const part = buffer.subarray(0, maxBytes);
-  const hx = part.toString('hex').replace(/(.{2})/g, '$1 ').trim();
-  return buffer.length > maxBytes ? `${hx} …` : hx;
+  console.log(`[${ts}] [worldline-ctep] ${message}`, data);
 }
 
 function parseBool(v) {
@@ -35,12 +24,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     try {
       config = JSON.parse(connectionString);
     } catch {
-      if (connectionString.startsWith('tcp://')) {
-        const match = connectionString.match(/tcp:\/\/([^:]+):?(\d+)?/i);
-        if (match) config = { ip: match[1], port: match[2] || '' };
-      } else if (connectionString.trim()) {
-        config = { ip: connectionString.trim() };
-      }
+      config = {};
     }
   } else if (connectionString && typeof connectionString === 'object') {
     config = connectionString;
@@ -59,70 +43,51 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     return '';
   };
 
-  const portRaw = get('port', 'Port', 'listenPort', 'listen_port');
-  const listenHostRaw = get('listenHost', 'listen_host', 'bindAddress', 'bind_address') || '0.0.0.0';
-  const timeoutMsRaw = get('timeoutMs', 'timeout', 'timeout_ms');
-  const bridgeUrl = get('bridgeUrl', 'bridge_url', 'worldlineBridgeUrl') || String(process.env.WORLDLINE_BRIDGE_URL || '').trim();
-  const saleBodyTemplate = get('saleBodyTemplate', 'sale_body_template', 'ctepSaleBody');
-  const approveRegexStr = get('approveRegex', 'approve_regex') || 'approved|accept|ok|autoris|transaction ok';
-  const declineRegexStr = get('declineRegex', 'decline_regex') || 'declin|refus|refused|error|annul';
-  let wrapStxEtx = true;
-  if (parseBool(get('noStxEtx', 'rawTcp'))) wrapStxEtx = false;
-  else if (get('wrapStxEtx', 'wrap_stx_etx') !== '') wrapStxEtx = parseBool(get('wrapStxEtx', 'wrap_stx_etx'));
-  let appendLrc = true;
-  if (get('appendLrc', 'append_lrc') !== '') appendLrc = parseBool(get('appendLrc', 'append_lrc'));
-  const currencyCode = (get('currencyCode', 'currency') || String(defaults.currencyCode || 'EUR')).toUpperCase();
-
-  const envSim = String(process.env.WORLDLINE_SIMULATE || '').trim() === '1';
-  const simulate = envSim || parseBool(get('simulate', 'testMode', 'test_mode'));
-
-  const parsedPort = Number.parseInt(portRaw || '0', 10);
-  const parsedTimeoutMs = Number.parseInt(timeoutMsRaw || String(defaults.timeoutMs || ''), 10);
-
-  let approveRegex;
-  try {
-    approveRegex = new RegExp(approveRegexStr, 'i');
-  } catch {
-    approveRegex = /approved|accept/i;
-  }
+  const listenPort = Number.parseInt(get('listenPort', 'port') || '9001', 10);
+  const listenHost = get('listenHost', 'bindAddress') || '0.0.0.0';
+  const timeoutMs = Number.parseInt(get('timeoutMs', 'timeout') || String(defaults.timeoutMs || 180000), 10);
+  const recoveryDelayMs = Number.parseInt(get('recoveryDelayMs') || '100000', 10);
+  const heartbeatMs = Number.parseInt(get('heartbeatMs') || '12000', 10);
+  const merchantRefPrefix = get('merchantRefPrefix') || 'POS';
+  const rawTcpEnabled = parseBool(get('rawTcp', 'noStxEtx'));
+  const wrapStxEtx = rawTcpEnabled
+    ? false
+    : (get('wrapStxEtx') === '' ? true : parseBool(get('wrapStxEtx')));
+  const appendLrc = get('appendLrc') === '' ? true : parseBool(get('appendLrc'));
+  const simulate = parseBool(get('simulate')) || String(process.env.WORLDLINE_SIMULATE || '') === '1';
+  const saleTemplate =
+    get('saleCommandTemplate', 'saleBodyTemplate', 'ctepSaleBody', 'sale_body_template')
+    || 'ACTION=SALE|amountMinor={amountMinor}|currency={currency}|merchantRef={reference}';
+  const cancelTemplate =
+    get('cancelCommandTemplate', 'cancelBodyTemplate', 'cancel_body_template')
+    || 'ACTION=CANCEL_RETAIL|merchantRef={reference}';
+  const resetTemplate = get('resetCommandTemplate') || 'ACTION=RESET_TRANSACTION';
+  const lastStatusTemplate = get('lastStatusCommandTemplate') || 'ACTION=LAST_TRANSACTION_STATUS';
+  const approvalPattern = get('approveRegex', 'approvalRegex', 'approve_regex') || 'approved|accept|ok|autoris|transaction ok';
+  const declinePattern = get('declineRegex', 'decline_regex') || 'declin|refus|refused|error|annul';
+  let approvalRegex;
   let declineRegex;
-  try {
-    declineRegex = new RegExp(declineRegexStr, 'i');
-  } catch {
-    declineRegex = /declin|refus/i;
-  }
-
-  const listenPort = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 9001;
-  const listenHost = listenHostRaw || '0.0.0.0';
+  try { approvalRegex = new RegExp(approvalPattern, 'i'); } catch { approvalRegex = /approved|accept|ok|autoris|transaction ok/i; }
+  try { declineRegex = new RegExp(declinePattern, 'i'); } catch { declineRegex = /declin|refus|refused|error|annul/i; }
 
   return {
-    terminalConnectsToPos: true,
     listenHost,
-    listenPort,
-    ip: '',
-    port: listenPort,
-    timeoutMs: Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0 ? parsedTimeoutMs : 180000,
-    currencyCode: currencyCode || 'EUR',
-    simulate,
-    bridgeUrl,
-    saleBodyTemplate,
-    approveRegex,
-    declineRegex,
+    listenPort: Number.isFinite(listenPort) && listenPort > 0 ? listenPort : 9001,
+    timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180000,
+    recoveryDelayMs: Number.isFinite(recoveryDelayMs) && recoveryDelayMs > 0 ? recoveryDelayMs : 100000,
+    heartbeatMs: Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : 12000,
+    merchantRefPrefix,
     wrapStxEtx,
     appendLrc,
-    cancelBodyTemplate: get('cancelBodyTemplate', 'cancel_body_template') || '',
+    simulate,
+    currencyCode: (get('currencyCode', 'currency') || String(defaults.currencyCode || 'EUR')).toUpperCase(),
+    saleTemplate,
+    cancelTemplate,
+    resetTemplate,
+    lastStatusTemplate,
+    approvalRegex,
+    declineRegex,
   };
-}
-
-function substituteSaleTemplate(template, { amountEuro, amountMinor, reference, currency }) {
-  const euroDot = amountEuro.toFixed(2);
-  return String(template)
-    .replace(/\{amountMinor\}/g, String(amountMinor))
-    .replace(/\{amountCents\}/g, String(amountMinor))
-    .replace(/\{amountEuro\}/g, euroDot.replace('.', ','))
-    .replace(/\{amountEuroDot\}/g, euroDot)
-    .replace(/\{reference\}/g, reference)
-    .replace(/\{currency\}/g, currency);
 }
 
 function xorLrc(buffer) {
@@ -131,231 +96,160 @@ function xorLrc(buffer) {
   return lrc & 0xff;
 }
 
-function buildWirePayload(config, bodyUtf8) {
-  const bodyBuf = Buffer.from(bodyUtf8, 'utf8');
-  if (!config.wrapStxEtx) return bodyBuf;
-  const stx = Buffer.from([0x02]);
-  const etx = Buffer.from([0x03]);
-  const core = Buffer.concat([stx, bodyBuf, etx]);
+function framePayload(config, bodyUtf8) {
+  const body = Buffer.from(bodyUtf8, 'utf8');
+  if (!config.wrapStxEtx) return body;
+  const core = Buffer.concat([Buffer.from([0x02]), body, Buffer.from([0x03])]);
   if (!config.appendLrc) return core;
-  const lrc = Buffer.from([xorLrc(core)]);
-  return Buffer.concat([core, lrc]);
+  return Buffer.concat([core, Buffer.from([xorLrc(core)])]);
 }
 
-/** Terminal (client) connects to this POS — one accepted socket per payment. */
-function listenForTerminalSocket(host, port, timeoutMs, isCancelled, onListening) {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    let settled = false;
-    let pollIv = null;
+function deframeToText(raw) {
+  if (!raw || !raw.length) return '';
+  let payload = raw;
+  const stx = payload.indexOf(0x02);
+  const etx = payload.lastIndexOf(0x03);
+  if (stx >= 0 && etx > stx) payload = payload.slice(stx + 1, etx);
+  const utf8 = payload.toString('utf8');
+  if (!utf8.includes('\uFFFD')) return utf8;
+  return payload.toString('binary');
+}
 
-    const stopPoll = () => {
-      if (pollIv) {
-        clearInterval(pollIv);
-        pollIv = null;
-      }
-    };
+function buildCtepCommand(action, fields = {}) {
+  const parts = [`ACTION=${action}`];
+  Object.entries(fields).forEach(([k, v]) => {
+    if (v == null || v === '') return;
+    parts.push(`${k}=${String(v)}`);
+  });
+  return parts.join('|');
+}
 
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      stopPoll();
-      try {
-        srv.close();
-      } catch {
-        // ignore
-      }
-      reject(err);
-    };
+function fillTemplate(template, vars) {
+  return String(template || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => {
+    const v = vars[key];
+    return v == null ? '' : String(v);
+  });
+}
 
-    let timer;
-    timer = setTimeout(() => {
-      fail(
-        new Error(
-          'Timeout waiting for the Worldline terminal to connect to this POS. On the device, set the ECR/cash register IP to this machine and the same port as configured here.',
-        ),
-      );
-    }, timeoutMs);
+class CtepRuntime {
+  constructor(config) {
+    this.config = config;
+    this.server = null;
+    this.socket = null;
+    this.socketBuffer = Buffer.alloc(0);
+    this.pending = null;
+    this.heartbeatTimer = null;
+  }
 
-    pollIv = setInterval(() => {
-      try {
-        if (isCancelled()) fail(new Error('Cancelled'));
-      } catch {
-        // ignore
-      }
-    }, 400);
+  key() {
+    return `${this.config.listenHost}:${this.config.listenPort}`;
+  }
 
-    srv.once('connection', (socket) => {
-      if (settled) {
-        try {
-          socket.destroy();
-        } catch {
-          // ignore
-        }
-        return;
+  async ensureStarted() {
+    if (this.server) return;
+    this.server = net.createServer((socket) => {
+      if (this.socket) {
+        this.socket.destroy();
       }
-      settled = true;
-      clearTimeout(timer);
-      stopPoll();
-      try {
-        srv.close();
-      } catch {
-        // ignore
-      }
-      socket.setTimeout(0);
-      wlLog('Terminal socket accepted', {
+      this.socket = socket;
+      this.socketBuffer = Buffer.alloc(0);
+      wlLog('Terminal connected to C-TEP service', {
         remoteAddress: socket.remoteAddress || '',
         remotePort: socket.remotePort || '',
-        localAddress: socket.localAddress || '',
-        localPort: socket.localPort || '',
       });
-      resolve(socket);
+      socket.on('data', (chunk) => {
+        this.socketBuffer = Buffer.concat([this.socketBuffer, chunk]);
+        if (this.pending) this.pending.onData();
+      });
+      socket.on('error', (err) => {
+        wlLog('Terminal socket error', { error: err?.message || String(err) });
+      });
+      socket.on('close', () => {
+        this.socket = null;
+        this.socketBuffer = Buffer.alloc(0);
+      });
     });
-
-    srv.on('error', (err) => {
-      clearTimeout(timer);
-      fail(err);
+    await new Promise((resolve, reject) => {
+      this.server.once('error', reject);
+      this.server.listen(this.config.listenPort, this.config.listenHost, resolve);
     });
+    this.startHeartbeat();
+    wlLog('C-TEP service started', { key: this.key() });
+  }
 
-    srv.listen(port, host, () => {
-      try {
-        onListening?.();
-      } catch {
-        // ignore
+  startHeartbeat() {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.socket) return;
+      if (this.pending) return;
+      const ping = framePayload(this.config, buildCtepCommand('HEARTBEAT'));
+      this.socket.write(ping);
+    }, this.config.heartbeatMs);
+  }
+
+  async waitForTerminal(timeoutMs) {
+    const start = Date.now();
+    while (!this.socket) {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error('Timeout waiting for terminal connection to C-TEP service');
       }
-    });
-  });
-}
-
-function exchangeOnSocket(socket, config, payload, { destroySocketWhenDone = true } = {}) {
-  const maxTotal = config.timeoutMs || 180000;
-  const idleMs = 900;
-  return new Promise((resolve, reject) => {
-    let buffer = Buffer.alloc(0);
-    let settled = false;
-    let idleTimer = null;
-
-    const cleanup = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      socket.removeAllListeners();
-      if (destroySocketWhenDone) {
-        try {
-          socket.destroy();
-        } catch {
-          // ignore
-        }
-      }
-    };
-
-    const totalTimer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(new Error('Worldline CTEP read timeout'));
-    }, maxTotal);
-
-    const bumpIdle = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(totalTimer);
-        cleanup();
-        resolve(buffer);
-      }, idleMs);
-    };
-
-    socket.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      if (idleTimer) clearTimeout(idleTimer);
-      clearTimeout(totalTimer);
-      cleanup();
-      reject(err);
-    });
-
-    socket.on('data', (chunk) => {
-      wlLog('Received chunk from terminal', {
-        chunkBytes: chunk.length,
-        totalBytesBeforeAppend: buffer.length,
-      });
-      buffer = Buffer.concat([buffer, chunk]);
-      bumpIdle();
-      if (config.wrapStxEtx) {
-        const etxAt = buffer.indexOf(0x03);
-        if (etxAt >= 0) {
-          if (settled) return;
-          settled = true;
-          if (idleTimer) clearTimeout(idleTimer);
-          clearTimeout(totalTimer);
-          cleanup();
-          resolve(buffer.slice(0, etxAt + 1));
-        }
-      }
-    });
-
-    const writeStart = () => {
-      wlLog('Sending payload to terminal', {
-        bytes: payload.length,
-        wrapStxEtx: !!config.wrapStxEtx,
-        appendLrc: !!config.appendLrc,
-        payloadHexPreview: previewHex(payload),
-      });
-      socket.write(payload, () => {
-        bumpIdle();
-      });
-    };
-
-    if (socket.connecting) {
-      socket.once('connect', writeStart);
-    } else {
-      writeStart();
+      await new Promise((r) => setTimeout(r, 200));
     }
-  });
+  }
+
+  async sendAndRead(command, timeoutMs) {
+    await this.ensureStarted();
+    await this.waitForTerminal(timeoutMs);
+    if (!this.socket) throw new Error('No terminal connected');
+    if (this.pending) throw new Error('Another C-TEP command is in progress');
+    const payload = framePayload(this.config, command);
+    this.socket.write(payload);
+
+    return new Promise((resolve, reject) => {
+      let done = false;
+      const finish = (fn, value) => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        this.pending = null;
+        fn(value);
+      };
+      const readNow = () => {
+        const buf = this.socketBuffer;
+        if (!buf.length) return;
+        const etxAt = buf.indexOf(0x03);
+        if (etxAt < 0) return;
+        const frame = buf.slice(0, etxAt + 1);
+        this.socketBuffer = buf.slice(etxAt + 1);
+        finish(resolve, frame);
+      };
+      const timer = setTimeout(() => {
+        finish(reject, new Error('C-TEP command timeout'));
+      }, timeoutMs);
+      this.pending = { onData: readNow };
+      readNow();
+    });
+  }
 }
 
 class WorldlineServiceInstance {
   constructor(config) {
     this.config = config;
     this.sessions = sharedSessions;
-  }
-
-  effectiveMode() {
-    if (this.config.simulate) return 'simulate';
-    if (this.config.bridgeUrl) return 'bridge';
-    if (this.config.saleBodyTemplate) return 'tcp-template';
-    return 'unconfigured';
+    const runtimeKey = `${config.listenHost}:${config.listenPort}`;
+    if (!sharedRuntimes.has(runtimeKey)) sharedRuntimes.set(runtimeKey, new CtepRuntime(config));
+    this.runtime = sharedRuntimes.get(runtimeKey);
   }
 
   async testConnection() {
     try {
-      const mode = this.effectiveMode();
-      if (mode === 'simulate') {
-        return { success: true, message: 'Worldline test mode (simulate) — no TCP call.' };
-      }
-      if (mode === 'bridge') {
-        return {
-          success: true,
-          message: 'Worldline HTTP bridge URL is set (run a live payment to verify end-to-end).',
-        };
-      }
-      await new Promise((resolve, reject) => {
-        const srv = net.createServer();
-        srv.once('error', reject);
-        srv.listen(this.config.listenPort, this.config.listenHost, () => {
-          srv.close(() => resolve());
-        });
-      });
+      await this.runtime.ensureStarted();
       return {
         success: true,
-        message: `This POS can listen on ${this.config.listenHost}:${this.config.listenPort}. Configure the Worldline terminal with this computer's IP and this port.`,
+        message: `C-TEP service listening on ${this.config.listenHost}:${this.config.listenPort}. Configure terminal CTEP + Sync Service.`,
       };
     } catch (err) {
-      return {
-        success: false,
-        message: `Worldline connection failed: ${err.message}`,
-      };
+      return { success: false, message: err?.message || 'Failed to start C-TEP service' };
     }
   }
 
@@ -364,66 +258,55 @@ class WorldlineServiceInstance {
     if (!Number.isFinite(amount) || amount <= 0) {
       return { success: false, message: 'Invalid amount for Worldline' };
     }
-
     const amountMinor = Math.round(amount * 100);
-    const sessionId = `WORLDLINE-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const reference = sessionId.replace(/[^a-zA-Z0-9]/g, '').slice(-16) || String(Date.now());
-
+    const sessionId = `WORLDLINE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const reference = `${this.config.merchantRefPrefix}-${Date.now()}`.slice(0, 32);
     const session = {
       id: sessionId,
       amountEuro: amount,
       amountMinor,
       reference,
       state: 'IN_PROGRESS',
-      message: 'Starting payment...',
+      message: 'Starting C-TEP sale...',
       details: null,
       cancelRequested: false,
       completed: false,
-      config: this.config,
+      startedAt: Date.now(),
     };
     this.sessions.set(sessionId, session);
-    wlLog('Session created', {
-      sessionId,
-      amountEuro: amount,
-      amountMinor,
-      reference,
-      mode: this.effectiveMode(),
-      listenHost: this.config.listenHost,
-      listenPort: this.config.listenPort,
-      timeoutMs: this.config.timeoutMs,
-      hasSaleBodyTemplate: !!this.config.saleBodyTemplate,
-      approveRegex: this.config.approveRegex?.source || '',
-      declineRegex: this.config.declineRegex?.source || '',
-      wrapStxEtx: !!this.config.wrapStxEtx,
-      appendLrc: !!this.config.appendLrc,
-    });
-
     this.processPaymentAsync(sessionId).catch((err) => {
       const current = this.sessions.get(sessionId);
       if (!current) return;
       current.state = 'ERROR';
-      current.message = err.message || 'Transaction error';
-      current.details = { error: err.message, code: err.code };
+      current.message = err?.message || 'C-TEP transaction failed';
+      current.details = { error: err?.message || String(err) };
       current.completed = true;
       this.sessions.set(sessionId, current);
     });
-
     return {
       success: true,
       sessionId,
       data: {
         state: session.state,
         message: session.message,
-        amount: session.amountEuro,
+        amount: amount,
         amountInCents: amountMinor,
       },
     };
   }
 
+  classifyResponseText(text) {
+    const normalized = String(text || '').trim();
+    if (!normalized) return { state: 'ERROR', message: 'Empty C-TEP response' };
+    if (this.config.declineRegex.test(normalized)) return { state: 'DECLINED', message: 'Payment declined.' };
+    if (this.config.approvalRegex.test(normalized)) return { state: 'APPROVED', message: 'Payment approved.' };
+    if (/CANCELLED|ABORT|CANCELED/i.test(normalized)) return { state: 'CANCELLED', message: 'Payment cancelled.' };
+    return { state: 'ERROR', message: 'Unrecognized C-TEP sale response' };
+  }
+
   async processPaymentAsync(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-
     const finish = (patch) => {
       const cur = this.sessions.get(sessionId);
       if (!cur) return;
@@ -433,252 +316,69 @@ class WorldlineServiceInstance {
       setTimeout(() => this.sessions.delete(sessionId), 5 * 60 * 1000);
     };
 
-    const mode = this.effectiveMode();
-    wlLog('Loaded worldline config snapshot', {
+    if (this.config.simulate) {
+      await new Promise((r) => setTimeout(r, 1000));
+      finish({ state: 'APPROVED', message: 'Payment approved (simulate mode).', details: { mode: 'simulate' } });
+      return;
+    }
+
+    const saleCommand = fillTemplate(this.config.saleTemplate, {
+      amountMinor: session.amountMinor,
+      amountCents: session.amountMinor,
+      amountEuro: session.amountEuro.toFixed(2).replace('.', ','),
+      amountEuroDot: session.amountEuro.toFixed(2),
+      currency: this.config.currencyCode,
+      reference: session.reference,
+      merchantRef: session.reference,
       sessionId,
-      mode,
-      listenHost: this.config.listenHost,
-      listenPort: this.config.listenPort,
-      timeoutMs: this.config.timeoutMs,
-      currencyCode: this.config.currencyCode,
-      hasBridgeUrl: !!this.config.bridgeUrl,
-      hasSaleBodyTemplate: !!this.config.saleBodyTemplate,
-      saleBodyTemplatePreview: previewText(this.config.saleBodyTemplate || '', 180),
-      saleBodyTemplateLength: String(this.config.saleBodyTemplate || '').length,
-      approveRegex: this.config.approveRegex?.source || '',
-      declineRegex: this.config.declineRegex?.source || '',
-      wrapStxEtx: !!this.config.wrapStxEtx,
-      appendLrc: !!this.config.appendLrc,
+    }) || buildCtepCommand('SALE', {
+      amountMinor: session.amountMinor,
+      currency: this.config.currencyCode,
+      merchantRef: session.reference,
     });
-    wlLog('Session processing started', { sessionId, mode });
-
-    if (mode === 'unconfigured') {
-      wlLog('Session failed: unconfigured mode', { sessionId });
-      finish({
-        state: 'ERROR',
-        message:
-          'Worldline CTEP is not fully configured: set bridgeUrl (HTTP gateway), or saleBodyTemplate + approveRegex for TCP after the terminal connects, or WORLDLINE_SIMULATE=1 for dev only.',
-        details: { mode },
-      });
-      return;
-    }
-
-    if (mode === 'simulate') {
-      await new Promise((r) => setTimeout(r, 1200));
-      const cur = this.sessions.get(sessionId);
-      if (!cur) return;
-      if (cur.cancelRequested) {
-        wlLog('Session cancelled during simulate', { sessionId });
-        finish({ state: 'CANCELLED', message: 'Payment cancelled.', details: { mode: 'simulate' } });
-        return;
-      }
-      wlLog('Session approved in simulate mode', { sessionId });
-      finish({
-        state: 'APPROVED',
-        message: 'Payment approved (simulate mode).',
-        details: { mode: 'simulate' },
-      });
-      return;
-    }
-
-    if (mode === 'bridge') {
-      try {
-        const cur0 = this.sessions.get(sessionId);
-        if (!cur0 || cur0.cancelRequested) {
-          finish({ state: 'CANCELLED', message: 'Payment cancelled.' });
-          return;
-        }
-        const res = await fetch(this.config.bridgeUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sessionId,
-            amount: session.amountEuro,
-            amountCents: session.amountMinor,
-            reference: session.reference,
-            currency: this.config.currencyCode,
-          }),
-        });
-        const text = await res.text();
-        wlLog('Bridge response received', {
-          sessionId,
-          status: res.status,
-          bodyPreview: previewText(text, 500),
-        });
-        let data = {};
-        try {
-          data = JSON.parse(text);
-        } catch {
-          data = {};
-        }
-        const cur = this.sessions.get(sessionId);
-        if (!cur) return;
-        if (cur.cancelRequested) {
-          finish({ state: 'CANCELLED', message: 'Payment cancelled.' });
-          return;
-        }
-        if (!res.ok) {
-          wlLog('Bridge returned non-OK', { sessionId, status: res.status });
-          finish({
-            state: 'ERROR',
-            message: data.message || data.error || `Bridge HTTP ${res.status}`,
-            details: { body: text.slice(0, 500) },
-          });
-          return;
-        }
-        const state = String(data.state || data.status || '').toUpperCase();
-        if (state === 'APPROVED' || state === 'SUCCESS' || data.approved === true) {
-          wlLog('Session approved by bridge response', { sessionId, state });
-          finish({
-            state: 'APPROVED',
-            message: String(data.message || 'Payment approved.'),
-            details: data,
-          });
-        } else if (state === 'DECLINED' || state === 'FAILURE') {
-          wlLog('Session declined by bridge response', { sessionId, state });
-          finish({
-            state: 'DECLINED',
-            message: String(data.message || 'Payment declined.'),
-            details: data,
-          });
-        } else if (state === 'CANCELLED') {
-          wlLog('Session cancelled by bridge response', { sessionId, state });
-          finish({ state: 'CANCELLED', message: String(data.message || 'Payment cancelled.'), details: data });
-        } else {
-          wlLog('Bridge response could not be classified', { sessionId, state, keys: Object.keys(data || {}) });
-          finish({
-            state: 'ERROR',
-            message: String(data.message || 'Unexpected bridge response'),
-            details: data,
-          });
-        }
-      } catch (err) {
-        wlLog('Bridge request failed', { sessionId, error: err?.message || '' });
-        finish({
-          state: 'ERROR',
-          message: err.message || 'Bridge request failed',
-          details: { error: err.message },
-        });
-      }
-      return;
-    }
-
-    // tcp-template
     try {
-      const body = substituteSaleTemplate(this.config.saleBodyTemplate, {
-        amountEuro: session.amountEuro,
-        amountMinor: session.amountMinor,
-        reference: session.reference,
-        currency: this.config.currencyCode,
-      });
-      const payload = buildWirePayload(this.config, body);
-      wlLog('TCP template prepared', {
-        sessionId,
-        bodyPreview: previewText(body, 500),
-        bodyLength: body.length,
-        payloadBytes: payload.length,
-        payloadHexPreview: previewHex(payload),
-      });
-
-      const curWait = this.sessions.get(sessionId);
-      if (curWait) {
-        curWait.message = `Listening on ${this.config.listenHost}:${this.config.listenPort} — connect from the terminal…`;
-        this.sessions.set(sessionId, curWait);
+      const rawSale = await this.runtime.sendAndRead(saleCommand, this.config.timeoutMs);
+      const saleText = deframeToText(rawSale);
+      const classified = this.classifyResponseText(saleText);
+      if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
+        finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
+        return;
       }
-      const clientSocket = await listenForTerminalSocket(
-        this.config.listenHost,
-        this.config.listenPort,
-        this.config.timeoutMs || 180000,
-        () => {
-          const s = this.sessions.get(sessionId);
-          return !!(s && s.cancelRequested);
-        },
-        () => {
-          const s = this.sessions.get(sessionId);
-          if (s) {
-            s.message = 'Terminal connected — processing…';
-            this.sessions.set(sessionId, s);
-          }
-        },
+
+      // C++ guide equivalent: after uncertainty/timeout window, do reset + last status.
+      await new Promise((r) => setTimeout(r, this.config.recoveryDelayMs));
+      await this.runtime.sendAndRead(fillTemplate(this.config.resetTemplate, { reference: session.reference, sessionId }) || buildCtepCommand('RESET_TRANSACTION'), 15000).catch(() => null);
+      const rawLast = await this.runtime.sendAndRead(
+        fillTemplate(this.config.lastStatusTemplate, { reference: session.reference, sessionId }) || buildCtepCommand('LAST_TRANSACTION_STATUS'),
+        30000,
       );
-
-      const raw = await exchangeOnSocket(clientSocket, this.config, payload, { destroySocketWhenDone: true });
-      const cur = this.sessions.get(sessionId);
-      if (!cur) return;
-      if (cur.cancelRequested) {
-        finish({ state: 'CANCELLED', message: 'Payment cancelled.' });
-        return;
-      }
-      const ascii = raw.toString('binary');
-      const utf8 = raw.toString('utf8');
-      const text = utf8.includes('\uFFFD') ? ascii : utf8;
-      wlLog('Terminal raw response received', {
-        sessionId,
-        rawBytes: raw.length,
-        rawHexPreview: previewHex(raw),
-        textPreview: previewText(text, 800),
-      });
-
-      if (this.config.declineRegex.test(text)) {
-        wlLog('Response classified as DECLINED', {
-          sessionId,
-          declineRegex: this.config.declineRegex?.source || '',
-        });
+      const lastText = deframeToText(rawLast);
+      const recovered = this.classifyResponseText(lastText);
+      if (recovered.state === 'APPROVED' || recovered.state === 'DECLINED') {
         finish({
-          state: 'DECLINED',
-          message: 'Payment declined.',
-          details: { rawPreview: text.slice(0, 800) },
-        });
-        return;
-      }
-      if (this.config.approveRegex.test(text)) {
-        wlLog('Response classified as APPROVED', {
-          sessionId,
-          approveRegex: this.config.approveRegex?.source || '',
-        });
-        finish({
-          state: 'APPROVED',
-          message: 'Payment approved.',
-          details: { rawPreview: text.slice(0, 800) },
+          state: recovered.state,
+          message: `${recovered.message} (Recovered via last transaction status)`,
+          details: { raw: lastText.slice(0, 1200), recovered: true },
         });
         return;
       }
       finish({
         state: 'ERROR',
-        message:
-          'Worldline response did not match approveRegex or declineRegex. Adjust approveRegex or check terminal logs.',
-        details: { rawPreview: text.slice(0, 800) },
-      });
-      wlLog('Response did not match approve/decline regex', {
-        sessionId,
-        approveRegex: this.config.approveRegex?.source || '',
-        declineRegex: this.config.declineRegex?.source || '',
+        message: 'Sale uncertain and recovery did not return a final status.',
+        details: { saleRaw: saleText.slice(0, 1200), lastRaw: lastText.slice(0, 1200) },
       });
     } catch (err) {
-      const msg = err?.message || '';
-      if (msg === 'Cancelled') {
-        wlLog('Session cancelled while waiting for socket/response', { sessionId });
-        finish({ state: 'CANCELLED', message: 'Payment cancelled.', details: {} });
-        return;
-      }
-      wlLog('TCP processing failed', {
-        sessionId,
-        error: err?.message || '',
-        code: err?.code || '',
-      });
       finish({
         state: 'ERROR',
-        message: msg || 'Worldline TCP error',
-        details: { error: err.message, code: err.code },
+        message: err?.message || 'C-TEP transaction error',
+        details: { error: err?.message || String(err) },
       });
     }
   }
 
   getSessionStatus(sessionId) {
     const session = this.sessions.get(sessionId);
-    if (!session) {
-      return { success: false, ok: false, message: 'Session not found' };
-    }
+    if (!session) return { success: false, ok: false, message: 'Session not found' };
     return {
       success: true,
       ok: true,
@@ -696,13 +396,18 @@ class WorldlineServiceInstance {
     const session = this.sessions.get(sessionId);
     if (!session) return { success: false, message: 'Session not found' };
     if (session.completed) return { success: false, message: 'Transaction already completed' };
-
     session.cancelRequested = true;
     session.state = 'CANCELLED';
     session.message = 'Cancellation requested...';
     this.sessions.set(sessionId, session);
-    wlLog('Cancellation requested', { sessionId, state: session.state });
-
+    try {
+      const cancelCmd =
+        fillTemplate(this.config.cancelTemplate, { reference: session.reference, merchantRef: session.reference, sessionId })
+        || buildCtepCommand('CANCEL_RETAIL', { merchantRef: session.reference });
+      await this.runtime.sendAndRead(cancelCmd, 20000);
+    } catch {
+      // Best effort cancel as with CTEP interaction constraints.
+    }
     return { success: true, message: 'Payment cancelled.' };
   }
 }

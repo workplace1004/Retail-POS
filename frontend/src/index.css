@@ -50,3 +50,28 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* Dark scrollbar for textarea in control views */
+.textarea-dark-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #64748b #2f4258;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar {
+  width: 12px;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar-track {
+  background: #2f4258;
+  border-radius: 9999px;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border: 2px solid #2f4258;
+  border-radius: 9999px;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

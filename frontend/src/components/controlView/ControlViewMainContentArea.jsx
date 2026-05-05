@@ -1178,12 +1178,11 @@ export function ControlViewMainContentArea({ ctx }) {
                 }`}
               onClick={() => {
                 setTopNavId(item.id);
-                if (item.id === 'categories-products') setSubNavId('Price Groups');
+                if (item.id === 'categories-products') setSubNavId('');
                 if (item.id === 'cash-register') {
-                  setSubNavId('Device Settings');
-                  setShowDeviceSettingsModal(true);
+                  setSubNavId('');
                 }
-                if (item.id === 'external-devices') setSubNavId('Printer');
+                if (item.id === 'external-devices') setSubNavId('');
               }}
             >
               <TopNavIcon id={item.icon} className="w-6 h-6 shrink-0" />

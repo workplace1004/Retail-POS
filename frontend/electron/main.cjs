@@ -9,6 +9,12 @@ const loadDist = app.isPackaged || process.env.ELECTRON_LOAD_DIST === '1';
  * Print HTML to the OS default printer (no dialog).
  * Uses a hidden window because data: URLs + print in the main fullscreen window are unreliable.
  */
+function registerAppQuitHandler() {
+  ipcMain.on('pos-app-quit', () => {
+    app.quit();
+  });
+}
+
 function registerPrintHandler() {
   ipcMain.handle('print-periodic-report-html', async (_event, html) => {
     const payload = typeof html === 'string' ? html : '';
@@ -93,6 +99,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  registerAppQuitHandler();
   registerPrintHandler();
   createWindow();
 });

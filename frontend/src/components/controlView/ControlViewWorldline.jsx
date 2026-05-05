@@ -82,17 +82,17 @@ export function ControlViewWorldline({
 
           <div className="mt-2">
             <label className="mb-1 block text-xs font-medium text-pos-text">
-              {tr('control.worldline.saleBodyTemplate', 'Sale body template')}
+              {tr('control.worldline.saleBodyTemplate', 'Sale command template')}
             </label>
             <textarea
               value={worldlineSaleBodyTemplate}
               onChange={(e) => setWorldlineSaleBodyTemplate(e.target.value)}
               onFocus={() => setWorldlineActiveField('template')}
               onClick={() => setWorldlineActiveField('template')}
-              rows={5}
+              rows={4}
               spellCheck={false}
-              className="w-full rounded-lg border border-gray-300 bg-pos-panel px-3 py-2 font-mono text-xs text-gray-200 placeholder-pos-muted focus:border-green-500 focus:outline-none"
-              placeholder={tr('control.worldline.saleBodyTemplatePlaceholder', 'Paste CTEP sale message template…')}
+              className="textarea-dark-scrollbar w-full rounded-lg border border-gray-300 bg-pos-panel px-3 py-2 font-mono text-xs text-gray-200 placeholder-pos-muted focus:border-green-500 focus:outline-none"
+              placeholder={tr('control.worldline.saleBodyTemplatePlaceholder', 'ACTION=SALE|amountMinor={amountMinor}|currency={currency}|merchantRef={reference}')}
             />
           </div>
 

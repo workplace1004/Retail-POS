@@ -25,6 +25,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { POS_API_PREFIX as API } from '../lib/apiOrigin.js';
 import { posTerminalAuthHeaders } from '../lib/posTerminalSession.js';
 import { fetchPosOptionLayoutRegisterKey } from '../lib/posOptionLayoutRegisterKey.js';
+import { notifyPriceDisplaySettingsChanged, POS_PRICE_DISPLAY_STORAGE_KEY } from '../lib/posPriceDisplaySettings.js';
 import { LoadingSpinner } from './LoadingSpinner';
 import { publicAssetUrl, resolveMediaSrc } from '../lib/publicAssetUrl.js';
 import {
@@ -4546,7 +4547,7 @@ export function ControlView({
   useEffect(() => {
     if (topNavId !== 'external-devices' || subNavId !== 'Price Display') return;
     try {
-      const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_price_display');
+      const raw = typeof localStorage !== 'undefined' && localStorage.getItem(POS_PRICE_DISPLAY_STORAGE_KEY);
       if (raw) {
         const s = JSON.parse(raw);
         if (s.type != null) setPriceDisplayType(s.type);
@@ -4938,7 +4939,10 @@ export function ControlView({
   const handleSavePriceDisplay = () => {
     setSavingPriceDisplay(true);
     try {
-      if (typeof localStorage !== 'undefined') localStorage.setItem('pos_price_display', JSON.stringify({ type: priceDisplayType }));
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(POS_PRICE_DISPLAY_STORAGE_KEY, JSON.stringify({ type: priceDisplayType }));
+        notifyPriceDisplaySettingsChanged();
+      }
     } finally {
       setSavingPriceDisplay(false);
     }

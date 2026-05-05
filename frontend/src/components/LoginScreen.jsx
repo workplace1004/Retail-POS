@@ -5,8 +5,11 @@ import { Dropdown } from './Dropdown';
 import { POS_API_PREFIX as API } from '../lib/apiOrigin.js';
 import { posTerminalAuthHeaders } from '../lib/posTerminalSession.js';
 import { publicAssetUrl } from '../lib/publicAssetUrl.js';
+
 const TOAST_DURATION_MS = 3500;
 const PIN_LEN = 4;
+/** Must match control-access PIN used elsewhere (App.jsx). */
+const QUIT_CONFIRM_PIN = '1258';
 
 const PAD = [
   ['7', '8', '9'],
@@ -15,7 +18,7 @@ const PAD = [
   ['Again', '0']
 ];
 
-export function LoginScreen({ time, onLogin }) {
+export function LoginScreen({ time, onLogin, onExitApplication }) {
   const { t } = useLanguage();
   const [users, setUsers] = useState([]);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -23,6 +26,9 @@ export function LoginScreen({ time, onLogin }) {
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(true);
   const loginSubmittingRef = useRef(false);
+
+  const [showQuitPinModal, setShowQuitPinModal] = useState(false);
+  const [quitPinInput, setQuitPinInput] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +58,27 @@ export function LoginScreen({ time, onLogin }) {
     }
     setPinInput((prev) => (prev.length >= PIN_LEN ? prev : prev + key));
   };
+
+  const handleQuitPadKey = (key) => {
+    if (key === 'Again') {
+      setQuitPinInput('');
+      return;
+    }
+    setQuitPinInput((prev) => (prev.length >= PIN_LEN ? prev : prev + key));
+  };
+
+  useEffect(() => {
+    if (!showQuitPinModal) return;
+    if (quitPinInput.length !== PIN_LEN) return;
+    if (quitPinInput === QUIT_CONFIRM_PIN) {
+      setShowQuitPinModal(false);
+      setQuitPinInput('');
+      onExitApplication?.();
+      return;
+    }
+    showToast(t('loginWrongPin'));
+    setQuitPinInput('');
+  }, [quitPinInput, showQuitPinModal, onExitApplication, t]);
 
   useEffect(() => {
     if (pinInput.length !== PIN_LEN) return;
@@ -106,6 +133,11 @@ export function LoginScreen({ time, onLogin }) {
     };
   }, [pinInput, selectedUser, onLogin, t]);
 
+  const closeQuitModal = () => {
+    setShowQuitPinModal(false);
+    setQuitPinInput('');
+  };
+
   return (
     <div className="flex flex-col h-full bg-pos-bg text-pos-text">
       <div className="flex shrink-0 items-center justify-between px-6 py-5 border-b border-pos-border">
@@ -114,7 +146,7 @@ export function LoginScreen({ time, onLogin }) {
         <div className="w-16" />
       </div>
 
-      <div className="flex flex-1 min-h-0 flex-col items-center gap-6 p-6">
+      <div className="relative flex flex-1 min-h-0 flex-col items-center gap-6 p-6 pb-20">
         <img
           src={publicAssetUrl('/logo.png')}
           alt=""
@@ -168,11 +200,76 @@ export function LoginScreen({ time, onLogin }) {
             )}
           </div>
         </div>
+
+        {typeof onExitApplication === 'function' && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuitPinInput('');
+              setShowQuitPinModal(true);
+            }}
+            aria-label={t('loginQuitAriaLabel')}
+            title={t('loginQuitAriaLabel')}
+            className="absolute bottom-4 right-4 flex h-16 w-16 items-center justify-center p-1.5 backdrop-blur-sm transition-opacity hover:opacity-90 active:opacity-100"
+          >
+            <img
+              src={publicAssetUrl('/quit.png')}
+              alt=""
+              className="max-h-full max-w-full object-contain"
+              draggable={false}
+            />
+          </button>
+        )}
       </div>
+
+      {showQuitPinModal && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="login-quit-pin-title"
+        >
+          <div className="bg-pos-panel w-full max-w-md rounded-xl border border-pos-border p-6 shadow-2xl">
+            <h2 id="login-quit-pin-title" className="text-xl font-semibold text-center text-pos-text mb-4">
+              {t('loginQuitPinTitle')}
+            </h2>
+            <div className="mb-4 h-16 flex items-center bg-pos-bg justify-center rounded text-xl font-mono text-white tracking-widest">
+              {quitPinInput.replace(/./g, '•') || t('pin')}
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {PAD.map((row) =>
+                row.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`col-span-1 py-2 rounded-lg font-semibold transition-colors border border-transparent ${key === 'Again'
+                      ? 'col-span-2 text-xl bg-pos-bg text-white active:border-white'
+                      : 'bg-pos-bg text-xl text-white active:border-white'
+                      } active:bg-green-500`}
+                    onClick={() => {
+                      if (key === 'Again') handleQuitPadKey('Again');
+                      else handleQuitPadKey(key);
+                    }}
+                  >
+                    {key === 'Again' ? t('again') : key}
+                  </button>
+                ))
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={closeQuitModal}
+              className="w-full py-3 rounded-lg text-lg font-semibold border border-pos-border bg-pos-bg text-pos-text active:bg-pos-panel transition-colors"
+            >
+              {t('cancel')}
+            </button>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div
-          className="fixed top-8 right-8 z-50 flex items-stretch rounded-2xl bg-gradient-to-br from-gray-900 to-gray-800 text-white shadow-2xl shadow-black/40 border border-white/10 overflow-hidden min-w-[280px]"
+          className="fixed top-8 right-8 z-[80] flex items-stretch rounded-2xl bg-gradient-to-br from-gray-900 to-gray-800 text-white shadow-2xl shadow-black/40 border border-white/10 overflow-hidden min-w-[280px]"
           role="alert"
           aria-live="polite"
         >
