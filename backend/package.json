@@ -7,8 +7,11 @@
     "seed": "node prisma/seed.js"
   },
   "scripts": {
-    "dev": "node --watch server.js",
+    "dev": "node scripts/dev-with-bridge.cjs",
+    "dev:api": "node --watch server.js",
+    "dev:worldline-bridge": "node --watch worldline-bridge.js",
     "start": "node server.js",
+    "start:worldline-bridge": "node worldline-bridge.js",
     "generate": "prisma generate",
     "migrate": "prisma db push --skip-generate",
     "seed": "node prisma/seed.js",

@@ -556,9 +556,12 @@ class WorldlineServiceInstance {
     if (this.config.bridgeUrl) {
       try {
         patch({ state: 'IN_PROGRESS', message: 'Processing payment via Worldline bridge...' });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
         const res = await fetch(this.config.bridgeUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({
             action: 'sale',
             sessionId,
@@ -568,6 +571,7 @@ class WorldlineServiceInstance {
             merchantRef: session.reference,
           }),
         });
+        clearTimeout(timeout);
         const text = await res.text();
         let data = {};
         try { data = JSON.parse(text); } catch { data = {}; }
@@ -610,10 +614,20 @@ class WorldlineServiceInstance {
           details: { bridge: true, data },
         });
       } catch (err) {
+        const msg = String(err?.message || err || 'Bridge request failed');
+        const isAbort = String(err?.name || '').toLowerCase() === 'aborterror';
+        const hint = isAbort
+          ? 'Bridge request timed out (15s). Verify bridge service is running and responsive.'
+          : 'Could not reach bridge service. Verify bridge process is running and URL/port are correct.';
+        wlLog('Bridge request failed', {
+          bridgeUrl: this.config.bridgeUrl,
+          error: msg,
+          hint,
+        });
         finish({
           state: 'ERROR',
-          message: err?.message || 'Bridge request failed',
-          details: { bridge: true, bridgeUrl: this.config.bridgeUrl },
+          message: `${hint} (${msg})`,
+          details: { bridge: true, bridgeUrl: this.config.bridgeUrl, error: msg },
         });
       }
       return;
