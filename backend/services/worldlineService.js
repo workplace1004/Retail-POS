@@ -209,6 +209,18 @@ class CtepRuntime {
     return new Promise((resolve, reject) => {
       let done = false;
       let idleTimer = null;
+      const isProtocolAdviceFrame = (text) => {
+        const trimmed = String(text || '').trim();
+        return /^C[ui]\b/.test(trimmed) || /^Ri\b/.test(trimmed);
+      };
+      const acknowledgeFrame = () => {
+        if (!this.socket || this.socket.destroyed) return;
+        try {
+          this.socket.write(Buffer.from([0x06]));
+        } catch {
+          // ignore ACK errors
+        }
+      };
       const finish = (fn, value) => {
         if (done) return;
         done = true;
@@ -223,29 +235,49 @@ class CtepRuntime {
           if (!this.socketBuffer.length) return;
           const frame = this.socketBuffer;
           this.socketBuffer = Buffer.alloc(0);
+          acknowledgeFrame();
           wlLog('Received idle-delimited C-TEP response', { bytes: frame.length });
+          const text = deframeToText(frame);
+          if (isProtocolAdviceFrame(text)) {
+            wlLog('Ignoring protocol advice frame while waiting response', {
+              preview: text.slice(0, 120),
+            });
+            bumpIdle();
+            return;
+          }
           finish(resolve, frame);
         }, 900);
       };
       const readNow = () => {
-        const buf = this.socketBuffer;
-        if (!buf.length) return;
-        // Ignore a standalone ACK frame and wait for the business response.
-        if (buf.length === 1 && buf[0] === 0x06) {
-          this.socketBuffer = Buffer.alloc(0);
+        while (true) {
+          const buf = this.socketBuffer;
+          if (!buf.length) return;
+          // Ignore a standalone ACK frame and wait for the business response.
+          if (buf.length === 1 && buf[0] === 0x06) {
+            this.socketBuffer = Buffer.alloc(0);
+            bumpIdle();
+            return;
+          }
+          const etxAt = buf.indexOf(0x03);
+          if (etxAt >= 0) {
+            const frame = buf.slice(0, etxAt + 1);
+            this.socketBuffer = buf.slice(etxAt + 1);
+            acknowledgeFrame();
+            wlLog('Received ETX-delimited C-TEP response', { bytes: frame.length });
+            const text = deframeToText(frame);
+            if (isProtocolAdviceFrame(text)) {
+              wlLog('Ignoring protocol advice frame while waiting response', {
+                preview: text.slice(0, 120),
+              });
+              continue;
+            }
+            finish(resolve, frame);
+            return;
+          }
+          // Some terminals/dialects return plain text without ETX.
           bumpIdle();
           return;
         }
-        const etxAt = buf.indexOf(0x03);
-        if (etxAt >= 0) {
-          const frame = buf.slice(0, etxAt + 1);
-          this.socketBuffer = buf.slice(etxAt + 1);
-          wlLog('Received ETX-delimited C-TEP response', { bytes: frame.length });
-          finish(resolve, frame);
-          return;
-        }
-        // Some terminals/dialects return plain text without ETX.
-        bumpIdle();
       };
       const timer = setTimeout(() => {
         finish(reject, new Error('C-TEP command timeout'));
