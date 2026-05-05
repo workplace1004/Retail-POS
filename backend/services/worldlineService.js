@@ -322,6 +322,36 @@ class WorldlineServiceInstance {
   classifyResponseText(text) {
     const normalized = String(text || '').trim();
     if (!normalized) return { state: 'ERROR', message: 'Empty C-TEP response' };
+    try {
+      const parsed = JSON.parse(normalized);
+      const flat = JSON.stringify(parsed).toLowerCase();
+      const statusHints = [
+        parsed?.status,
+        parsed?.state,
+        parsed?.result,
+        parsed?.transactionStatus,
+        parsed?.TransactionStatus,
+        parsed?.ResponseCode,
+        parsed?.responseCode,
+        parsed?.ResultCode,
+        parsed?.resultCode,
+        parsed?.Outcome,
+        parsed?.outcome,
+      ]
+        .filter((v) => v != null)
+        .map((v) => String(v).trim().toLowerCase());
+      if (parsed?.approved === true || statusHints.some((v) => /approved|success|ok|accept|00/.test(v))) {
+        return { state: 'APPROVED', message: 'Payment approved.' };
+      }
+      if (parsed?.approved === false || statusHints.some((v) => /declin|refus|reject|error|fail/.test(v))) {
+        return { state: 'DECLINED', message: 'Payment declined.' };
+      }
+      if (/approved|success|ok|accept/.test(flat)) return { state: 'APPROVED', message: 'Payment approved.' };
+      if (/declin|refus|reject|error|fail/.test(flat)) return { state: 'DECLINED', message: 'Payment declined.' };
+      if (/cancel/.test(flat)) return { state: 'CANCELLED', message: 'Payment cancelled.' };
+    } catch {
+      // Not JSON; fall back to regex matching below.
+    }
     if (this.config.declineRegex.test(normalized)) return { state: 'DECLINED', message: 'Payment declined.' };
     if (this.config.approvalRegex.test(normalized)) return { state: 'APPROVED', message: 'Payment approved.' };
     if (/CANCELLED|ABORT|CANCELED/i.test(normalized)) return { state: 'CANCELLED', message: 'Payment cancelled.' };
@@ -383,6 +413,7 @@ class WorldlineServiceInstance {
       });
       const rawSale = await this.runtime.sendAndRead(saleCommand, this.config.timeoutMs);
       const saleText = deframeToText(rawSale);
+      wlLog('Decoded SALE response text', { text: saleText.slice(0, 2000) });
       patch({ message: 'Sale response received. Validating status...' });
       const classified = this.classifyResponseText(saleText);
       if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
@@ -403,6 +434,7 @@ class WorldlineServiceInstance {
         30000,
       );
       const lastText = deframeToText(rawLast);
+      wlLog('Decoded LAST_TRANSACTION_STATUS response text', { text: lastText.slice(0, 2000) });
       const recovered = this.classifyResponseText(lastText);
       if (recovered.state === 'APPROVED' || recovered.state === 'DECLINED') {
         finish({
