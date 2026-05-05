@@ -7,7 +7,8 @@
     "seed": "node prisma/seed.js"
   },
   "scripts": {
-    "dev": "node --watch server.js",
+    "dev": "node scripts/dev-with-bridge.cjs",
+    "dev:server": "node --watch server.js",
     "start": "node server.js",
     "generate": "prisma generate",
     "migrate": "prisma db push --skip-generate",
