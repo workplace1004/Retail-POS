@@ -27,7 +27,7 @@ Or from `backend`:
 npm run worldline-bridge
 ```
 
-Uses portable Java from `sample/runtime/java` if present, otherwise `JAVA_HOME` or `java` on PATH.
+Uses **only** portable Java at `sample/runtime/java/bin/java.exe` (same as `sample/START_BRIDGE_ONLY.bat`). Run `sample/INSTALL_PORTABLE_JAVA.bat` once if that path is missing; no JDK install or `JAVA_HOME` required.
 
 ## Configure the POS
 
