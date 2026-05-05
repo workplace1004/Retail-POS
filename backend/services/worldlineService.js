@@ -130,7 +130,10 @@ function buildCtepCommand(action, fields = {}) {
 function fillTemplate(template, vars) {
   return String(template || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_, key) => {
     const v = vars[key];
-    return v == null ? '' : String(v);
+    if (v == null) {
+      throw new Error(`Missing template variable: ${key}`);
+    }
+    return String(v);
   });
 }
 
@@ -152,6 +155,7 @@ class CtepRuntime {
     this.socketBuffer = Buffer.alloc(0);
     this.pending = null;
     this.heartbeatTimer = null;
+    this.detectedPoiId = null;
   }
 
   key() {
@@ -247,6 +251,14 @@ class CtepRuntime {
         const trimmed = String(text || '').trim();
         return /^C[ui]\b/.test(trimmed) || /^Ri\b/.test(trimmed);
       };
+      const updateDetectedPoiId = (text) => {
+        const s = String(text || '');
+        const m = s.match(/[A-Z]{2}\d{6}/);
+        if (m && m[0]) {
+          this.detectedPoiId = m[0];
+          wlLog('Detected terminal POIID from advice frame', { poiId: this.detectedPoiId });
+        }
+      };
       const isIgnorableControlFrame = (frame, text) => {
         const size = frame?.length || 0;
         if (!size) return true;
@@ -307,6 +319,7 @@ class CtepRuntime {
           wlLog('Received idle-delimited C-TEP response', { bytes: frame.length });
           const text = deframeToText(frame);
           if (isProtocolAdviceFrame(text)) {
+            updateDetectedPoiId(text);
             wlLog('Ignoring protocol advice frame while waiting response', {
               preview: text.slice(0, 120),
             });
@@ -351,6 +364,7 @@ class CtepRuntime {
             wlLog('Received ETX-delimited C-TEP response', { bytes: frame.length });
             const text = deframeToText(frame);
             if (isProtocolAdviceFrame(text)) {
+              updateDetectedPoiId(text);
               wlLog('Ignoring protocol advice frame while waiting response', {
                 preview: text.slice(0, 120),
               });
@@ -517,7 +531,13 @@ class WorldlineServiceInstance {
     const nowIso = new Date().toISOString();
     const defaultServiceId = `S${Date.now().toString(36).slice(-8)}`;
     const defaultTxnId = session.reference;
-    const defaultPoiId = String(this.config.poiId || this.config.poiid || 'RX5000');
+    const defaultPoiId = String(
+      this.config.poiId
+      || this.config.POIID
+      || this.config.poiid
+      || this.runtime.detectedPoiId
+      || 'RX5000',
+    );
     const configuredSaleCommand = fillTemplate(this.config.saleTemplate, {
       amountMinor: session.amountMinor,
       amount: session.amountEuro.toFixed(2),
