@@ -60,6 +60,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const saleTemplate =
     get('saleCommandTemplate', 'saleBodyTemplate', 'ctepSaleBody', 'sale_body_template')
     || 'ACTION=SALE|amountMinor={amountMinor}|currency={currency}|merchantRef={reference}';
+  const bridgeUrl = get('bridgeUrl', 'bridge_url', 'worldlineBridgeUrl') || String(process.env.WORLDLINE_BRIDGE_URL || '').trim();
   const cancelTemplate =
     get('cancelCommandTemplate', 'cancelBodyTemplate', 'cancel_body_template')
     || 'ACTION=CANCEL_RETAIL|merchantRef={reference}';
@@ -85,6 +86,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     simulate,
     currencyCode: (get('currencyCode', 'currency') || String(defaults.currencyCode || 'EUR')).toUpperCase(),
     saleTemplate,
+    bridgeUrl,
     cancelTemplate,
     resetTemplate,
     lastStatusTemplate,
@@ -551,6 +553,72 @@ class WorldlineServiceInstance {
       return;
     }
 
+    if (this.config.bridgeUrl) {
+      try {
+        patch({ state: 'IN_PROGRESS', message: 'Processing payment via Worldline bridge...' });
+        const res = await fetch(this.config.bridgeUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'sale',
+            sessionId,
+            amountMinor: session.amountMinor,
+            amount: session.amountEuro,
+            currency: this.config.currencyCode || 'EUR',
+            merchantRef: session.reference,
+          }),
+        });
+        const text = await res.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch { data = {}; }
+        if (!res.ok) {
+          finish({
+            state: 'ERROR',
+            message: data?.message || data?.error || `Bridge HTTP ${res.status}`,
+            details: { bridgeUrl: this.config.bridgeUrl, bridgeBody: text.slice(0, 2000) },
+          });
+          return;
+        }
+        const stateRaw = String(data?.state || data?.status || '').toUpperCase();
+        if (stateRaw === 'APPROVED' || stateRaw === 'SUCCESS' || data?.approved === true) {
+          finish({
+            state: 'APPROVED',
+            message: String(data?.message || 'Payment approved (bridge).'),
+            details: { bridge: true, data },
+          });
+          return;
+        }
+        if (stateRaw === 'DECLINED' || stateRaw === 'FAILURE' || data?.approved === false) {
+          finish({
+            state: 'DECLINED',
+            message: String(data?.message || 'Payment declined (bridge).'),
+            details: { bridge: true, data },
+          });
+          return;
+        }
+        if (stateRaw === 'CANCELLED') {
+          finish({
+            state: 'CANCELLED',
+            message: String(data?.message || 'Payment cancelled (bridge).'),
+            details: { bridge: true, data },
+          });
+          return;
+        }
+        finish({
+          state: 'ERROR',
+          message: String(data?.message || 'Unexpected bridge response'),
+          details: { bridge: true, data },
+        });
+      } catch (err) {
+        finish({
+          state: 'ERROR',
+          message: err?.message || 'Bridge request failed',
+          details: { bridge: true, bridgeUrl: this.config.bridgeUrl },
+        });
+      }
+      return;
+    }
+
     const nowIso = new Date().toISOString();
     const defaultServiceId = `S${Date.now().toString(36).slice(-8)}`;
     const defaultTxnId = session.reference;
@@ -797,6 +865,22 @@ class WorldlineServiceInstance {
     session.state = 'CANCELLED';
     session.message = 'Cancellation requested...';
     this.sessions.set(sessionId, session);
+    if (this.config.bridgeUrl) {
+      try {
+        await fetch(this.config.bridgeUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'cancel',
+            sessionId,
+            merchantRef: session.reference,
+          }),
+        });
+      } catch {
+        // best effort
+      }
+      return { success: true, message: 'Payment cancelled.' };
+    }
     try {
       const cancelCmd =
         fillTemplate(this.config.cancelTemplate, { reference: session.reference, merchantRef: session.reference, sessionId })
