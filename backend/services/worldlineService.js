@@ -47,6 +47,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const listenHost = get('listenHost', 'bindAddress') || '0.0.0.0';
   const timeoutMs = Number.parseInt(get('timeoutMs', 'timeout') || String(defaults.timeoutMs || 180000), 10);
   const recoveryDelayMs = Number.parseInt(get('recoveryDelayMs') || '100000', 10);
+  const saleResponseWaitMs = Number.parseInt(get('saleResponseWaitMs') || '20000', 10);
   const heartbeatMs = Number.parseInt(get('heartbeatMs') || '12000', 10);
   const merchantRefPrefix = get('merchantRefPrefix') || 'POS';
   const rawTcpEnabled = parseBool(get('rawTcp', 'noStxEtx'));
@@ -75,6 +76,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     listenPort: Number.isFinite(listenPort) && listenPort > 0 ? listenPort : 9001,
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180000,
     recoveryDelayMs: Number.isFinite(recoveryDelayMs) && recoveryDelayMs > 0 ? recoveryDelayMs : 100000,
+    saleResponseWaitMs: Number.isFinite(saleResponseWaitMs) && saleResponseWaitMs > 0 ? saleResponseWaitMs : 20000,
     heartbeatMs: Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : 12000,
     merchantRefPrefix,
     wrapStxEtx,
@@ -446,7 +448,7 @@ class WorldlineServiceInstance {
       return;
     }
 
-    const saleCommand = fillTemplate(this.config.saleTemplate, {
+    const configuredSaleCommand = fillTemplate(this.config.saleTemplate, {
       amountMinor: session.amountMinor,
       amountCents: session.amountMinor,
       amountEuro: session.amountEuro.toFixed(2).replace('.', ','),
@@ -460,6 +462,14 @@ class WorldlineServiceInstance {
       currency: this.config.currencyCode,
       merchantRef: session.reference,
     });
+    const genericSaleCommand = buildCtepCommand('SALE', {
+      amountMinor: session.amountMinor,
+      currency: this.config.currencyCode,
+      merchantRef: session.reference,
+    });
+    const saleCommandCandidates = configuredSaleCommand === genericSaleCommand
+      ? [configuredSaleCommand]
+      : [configuredSaleCommand, genericSaleCommand];
     try {
       patch({
         state: 'IN_PROGRESS',
@@ -475,9 +485,45 @@ class WorldlineServiceInstance {
         state: 'IN_PROGRESS',
         message: 'Terminal connected. Sending sale request...',
       });
-      const rawSale = await this.runtime.sendAndRead(saleCommand, this.config.timeoutMs);
+      let rawSale = null;
+      let sentCommandPreview = '';
+      let lastSendError = null;
+      for (let i = 0; i < saleCommandCandidates.length; i += 1) {
+        const candidate = saleCommandCandidates[i];
+        const isFallback = i > 0;
+        patch({
+          state: 'IN_PROGRESS',
+          message: isFallback
+            ? 'Primary sale format gave no business response. Trying fallback sale format...'
+            : 'Terminal connected. Sending sale request...',
+        });
+        try {
+          sentCommandPreview = String(candidate || '').slice(0, 500);
+          rawSale = await this.runtime.sendAndRead(
+            candidate,
+            Math.min(this.config.timeoutMs, this.config.saleResponseWaitMs),
+          );
+          if (rawSale) break;
+        } catch (err) {
+          lastSendError = err;
+          wlLog('Sale command attempt failed', {
+            attempt: i + 1,
+            fallback: isFallback,
+            error: err?.message || String(err),
+          });
+        }
+      }
+      if (!rawSale) {
+        throw new Error(
+          lastSendError?.message
+            || 'No business sale response from terminal. Verify sale template/terminal protocol mapping.',
+        );
+      }
       const saleText = deframeToText(rawSale);
-      wlLog('Decoded SALE response text', { text: saleText.slice(0, 2000) });
+      wlLog('Decoded SALE response text', {
+        text: saleText.slice(0, 2000),
+        commandPreview: sentCommandPreview,
+      });
       patch({ message: 'Sale response received. Validating status...' });
       const classified = this.classifyResponseText(saleText);
       if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
