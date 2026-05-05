@@ -128,6 +128,13 @@ function deframeToText(raw) {
   return payload.toString('binary');
 }
 
+function hasInterimProcessingSignature(buffer) {
+  if (!buffer || !buffer.length) return false;
+  const mc = Buffer.from([0x4d, 0x43]); // "MC"
+  const tlv = Buffer.from([0xdf, 0x2d, 0x02, 0x00, 0x02]); // observed pending/status marker
+  return buffer.indexOf(mc) >= 0 && buffer.indexOf(tlv) >= 0;
+}
+
 function buildCtepCommand(action, fields = {}) {
   const parts = [`ACTION=${action}`];
   Object.entries(fields).forEach(([k, v]) => {
@@ -290,16 +297,7 @@ class CtepRuntime {
         if (size <= 10 && asciiPrintableCount <= 2) return true;
         return false;
       };
-      const isInterimProcessingFrame = (frame) => {
-        const size = frame?.length || 0;
-        if (size < 6) return false;
-        // Common C-TEP interim status observed on RX5000:
-        // starts with "MC" and contains TLV DF2D020002 (status "processing/pending").
-        const startsMc = frame[0] === 0x4d && frame[1] === 0x43; // "MC"
-        if (!startsMc) return false;
-        const tlv = Buffer.from([0xdf, 0x2d, 0x02, 0x00, 0x02]);
-        return frame.indexOf(tlv) >= 0;
-      };
+      const isInterimProcessingFrame = (frame) => hasInterimProcessingSignature(frame);
       const acknowledgeFrame = () => {
         if (!this.socket || this.socket.destroyed) return;
         try {
@@ -759,16 +757,24 @@ class WorldlineServiceInstance {
       }
       let saleText = '';
       if (rawSale) {
+        if (hasInterimProcessingSignature(rawSale)) {
+          forceRecovery = true;
+          wlLog('SALE response contains interim-processing signature; switching to recovery', {
+            bytes: rawSale.length,
+          });
+        }
         saleText = deframeToText(rawSale);
         wlLog('Decoded SALE response text', {
           text: saleText.slice(0, 2000),
           commandPreview: sentCommandPreview,
         });
-        patch({ message: 'Sale response received. Validating status...' });
-        const classified = this.classifyResponseText(saleText);
-        if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
-          finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
-          return;
+        if (!forceRecovery) {
+          patch({ message: 'Sale response received. Validating status...' });
+          const classified = this.classifyResponseText(saleText);
+          if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
+            finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
+            return;
+          }
         }
       }
 
