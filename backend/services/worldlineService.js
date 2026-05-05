@@ -216,6 +216,7 @@ class CtepRuntime {
     return new Promise((resolve, reject) => {
       let done = false;
       let idleTimer = null;
+      let interimFinalTimer = null;
       const isProtocolAdviceFrame = (text) => {
         const trimmed = String(text || '').trim();
         return /^C[ui]\b/.test(trimmed) || /^Ri\b/.test(trimmed);
@@ -260,8 +261,15 @@ class CtepRuntime {
         done = true;
         if (timer) clearTimeout(timer);
         if (idleTimer) clearTimeout(idleTimer);
+        if (interimFinalTimer) clearTimeout(interimFinalTimer);
         this.pending = null;
         fn(value);
+      };
+      const startInterimFinalTimer = () => {
+        if (interimFinalTimer) return;
+        interimFinalTimer = setTimeout(() => {
+          finish(reject, new Error('C-TEP interim without final response'));
+        }, 45000);
       };
       const bumpIdle = () => {
         if (idleTimer) clearTimeout(idleTimer);
@@ -292,6 +300,7 @@ class CtepRuntime {
               bytes: frame.length,
               preview: text.slice(0, 120),
             });
+            startInterimFinalTimer();
             bumpIdle();
             return;
           }
@@ -333,6 +342,7 @@ class CtepRuntime {
                 bytes: frame.length,
                 preview: text.slice(0, 120),
               });
+              startInterimFinalTimer();
               continue;
             }
             finish(resolve, frame);
@@ -531,6 +541,7 @@ class WorldlineServiceInstance {
       let rawSale = null;
       let sentCommandPreview = '';
       let lastSendError = null;
+      let forceRecovery = false;
       for (let i = 0; i < saleCommandCandidates.length; i += 1) {
         const candidate = saleCommandCandidates[i];
         const isFallback = i > 0;
@@ -564,6 +575,14 @@ class WorldlineServiceInstance {
           if (rawSale) break;
         } catch (err) {
           lastSendError = err;
+          if (String(err?.message || '').includes('interim without final response')) {
+            forceRecovery = true;
+            wlLog('Moving to recovery after interim-only terminal flow', {
+              attempt: i + 1,
+              fallbackTried: i > 0,
+            });
+            break;
+          }
           wlLog('Sale command attempt failed', {
             attempt: i + 1,
             fallback: isFallback,
@@ -571,31 +590,36 @@ class WorldlineServiceInstance {
           });
         }
       }
-      if (!rawSale) {
+      if (!rawSale && !forceRecovery) {
         throw new Error(
           lastSendError?.message
             || 'No business sale response from terminal. Verify sale template/terminal protocol mapping.',
         );
       }
-      const saleText = deframeToText(rawSale);
-      wlLog('Decoded SALE response text', {
-        text: saleText.slice(0, 2000),
-        commandPreview: sentCommandPreview,
-      });
-      patch({ message: 'Sale response received. Validating status...' });
-      const classified = this.classifyResponseText(saleText);
-      if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
-        finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
-        return;
+      let saleText = '';
+      if (rawSale) {
+        saleText = deframeToText(rawSale);
+        wlLog('Decoded SALE response text', {
+          text: saleText.slice(0, 2000),
+          commandPreview: sentCommandPreview,
+        });
+        patch({ message: 'Sale response received. Validating status...' });
+        const classified = this.classifyResponseText(saleText);
+        if (classified.state === 'APPROVED' || classified.state === 'DECLINED' || classified.state === 'CANCELLED') {
+          finish({ state: classified.state, message: classified.message, details: { raw: saleText.slice(0, 1200) } });
+          return;
+        }
       }
 
       // C++ guide equivalent: after uncertainty/timeout window, do reset + last status.
       patch({
         state: 'IN_PROGRESS',
-        message: 'Sale status uncertain. Starting recovery (reset + last transaction status)...',
+        message: forceRecovery
+          ? 'Sale still processing without final response. Starting status recovery...'
+          : 'Sale status uncertain. Starting recovery (reset + last transaction status)...',
         details: { saleRaw: saleText.slice(0, 1200), recoveryPending: true },
       });
-      await new Promise((r) => setTimeout(r, this.config.recoveryDelayMs));
+      await new Promise((r) => setTimeout(r, forceRecovery ? 2000 : this.config.recoveryDelayMs));
       await this.runtime.sendAndRead(fillTemplate(this.config.resetTemplate, { reference: session.reference, sessionId }) || buildCtepCommand('RESET_TRANSACTION'), 15000).catch(() => null);
       const rawLast = await this.runtime.sendAndRead(
         fillTemplate(this.config.lastStatusTemplate, { reference: session.reference, sessionId }) || buildCtepCommand('LAST_TRANSACTION_STATUS'),
