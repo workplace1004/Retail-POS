@@ -133,6 +133,11 @@ function fillTemplate(template, vars) {
   });
 }
 
+function unresolvedTemplateTokens(template) {
+  const tokens = String(template || '').match(/\{([a-zA-Z0-9_]+)\}/g) || [];
+  return [...new Set(tokens.map((t) => t.slice(1, -1)))];
+}
+
 class CtepRuntime {
   constructor(config) {
     this.config = config;
@@ -448,8 +453,14 @@ class WorldlineServiceInstance {
       return;
     }
 
+    const nowIso = new Date().toISOString();
+    const defaultServiceId = `S${Date.now().toString(36).slice(-8)}`;
+    const defaultTxnId = session.reference;
+    const defaultPoiId = String(this.config.poiId || this.config.poiid || 'RX5000');
     const configuredSaleCommand = fillTemplate(this.config.saleTemplate, {
       amountMinor: session.amountMinor,
+      amount: session.amountEuro.toFixed(2),
+      amountNumber: session.amountEuro.toFixed(2),
       amountCents: session.amountMinor,
       amountEuro: session.amountEuro.toFixed(2).replace('.', ','),
       amountEuroDot: session.amountEuro.toFixed(2),
@@ -457,6 +468,13 @@ class WorldlineServiceInstance {
       reference: session.reference,
       merchantRef: session.reference,
       sessionId,
+      serviceId: defaultServiceId,
+      saleId: 'POS',
+      transactionId: defaultTxnId,
+      timeStamp: nowIso,
+      timestamp: nowIso,
+      poiId: defaultPoiId,
+      POIID: defaultPoiId,
     }) || buildCtepCommand('SALE', {
       amountMinor: session.amountMinor,
       currency: this.config.currencyCode,
@@ -491,6 +509,19 @@ class WorldlineServiceInstance {
       for (let i = 0; i < saleCommandCandidates.length; i += 1) {
         const candidate = saleCommandCandidates[i];
         const isFallback = i > 0;
+        if (!isFallback) {
+          const unresolved = unresolvedTemplateTokens(candidate);
+          if (unresolved.length) {
+            lastSendError = new Error(
+              `Worldline sale template has unresolved placeholders: ${unresolved.join(', ')}`,
+            );
+            wlLog('Sale template unresolved placeholders detected', {
+              unresolved,
+              preview: String(candidate).slice(0, 500),
+            });
+            continue;
+          }
+        }
         patch({
           state: 'IN_PROGRESS',
           message: isFallback
