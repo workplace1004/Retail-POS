@@ -313,7 +313,7 @@ class CtepRuntime {
         if (interimFinalTimer) return;
         interimFinalTimer = setTimeout(() => {
           finish(reject, new Error('C-TEP interim without final response'));
-        }, 45000);
+        }, 8000);
       };
       const bumpIdle = () => {
         if (idleTimer) clearTimeout(idleTimer);
