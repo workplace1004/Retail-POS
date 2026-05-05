@@ -1,4 +1,5 @@
 import net from 'net';
+import crypto from 'crypto';
 
 const sharedSessions = new Map();
 const sharedRuntimes = new Map();
@@ -138,6 +139,11 @@ function unresolvedTemplateTokens(template) {
   return [...new Set(tokens.map((t) => t.slice(1, -1)))];
 }
 
+function looksLikeJsonPayload(command) {
+  const s = String(command || '').trim();
+  return s.startsWith('{') || s.startsWith('[');
+}
+
 class CtepRuntime {
   constructor(config) {
     this.config = config;
@@ -209,9 +215,29 @@ class CtepRuntime {
     await this.waitForTerminal(timeoutMs);
     if (!this.socket) throw new Error('No terminal connected');
     if (this.pending) throw new Error('Another C-TEP command is in progress');
-    const payload = framePayload(this.config, command);
-    wlLog('Sending C-TEP command', { command: String(command).slice(0, 500), timeoutMs });
-    this.socket.write(payload);
+    const commandText = String(command ?? '');
+    if (looksLikeJsonPayload(commandText)) {
+      try {
+        JSON.parse(commandText);
+      } catch (err) {
+        throw new Error(`Invalid JSON sale command: ${err?.message || String(err)}`);
+      }
+    }
+    const payload = framePayload(this.config, commandText);
+    const payloadSha1 = crypto.createHash('sha1').update(payload).digest('hex');
+    wlLog('Sending C-TEP command', {
+      commandPreview: commandText.slice(0, 500),
+      commandLength: commandText.length,
+      payloadBytes: payload.length,
+      payloadSha1,
+      timeoutMs,
+    });
+    this.socket.write(payload, () => {
+      wlLog('C-TEP payload write completed', {
+        payloadBytes: payload.length,
+        payloadSha1,
+      });
+    });
 
     return new Promise((resolve, reject) => {
       let done = false;
