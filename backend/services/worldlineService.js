@@ -47,7 +47,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
   const listenHost = get('listenHost', 'bindAddress') || '0.0.0.0';
   const timeoutMs = Number.parseInt(get('timeoutMs', 'timeout') || String(defaults.timeoutMs || 180000), 10);
   const recoveryDelayMs = Number.parseInt(get('recoveryDelayMs') || '100000', 10);
-  const saleResponseWaitMs = Number.parseInt(get('saleResponseWaitMs') || '20000', 10);
+  const saleResponseWaitMs = Number.parseInt(get('saleResponseWaitMs') || '180000', 10);
   const heartbeatMs = Number.parseInt(get('heartbeatMs') || '12000', 10);
   const merchantRefPrefix = get('merchantRefPrefix') || 'POS';
   const rawTcpEnabled = parseBool(get('rawTcp', 'noStxEtx'));
@@ -76,7 +76,7 @@ function parseTerminalConnection(connectionString, defaults = {}) {
     listenPort: Number.isFinite(listenPort) && listenPort > 0 ? listenPort : 9001,
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 180000,
     recoveryDelayMs: Number.isFinite(recoveryDelayMs) && recoveryDelayMs > 0 ? recoveryDelayMs : 100000,
-    saleResponseWaitMs: Number.isFinite(saleResponseWaitMs) && saleResponseWaitMs > 0 ? saleResponseWaitMs : 20000,
+    saleResponseWaitMs: Number.isFinite(saleResponseWaitMs) && saleResponseWaitMs > 0 ? saleResponseWaitMs : 180000,
     heartbeatMs: Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : 12000,
     merchantRefPrefix,
     wrapStxEtx,
@@ -555,9 +555,11 @@ class WorldlineServiceInstance {
         });
         try {
           sentCommandPreview = String(candidate || '').slice(0, 500);
+          // Do not fallback too early: RX5000 can stay in processing state
+          // while waiting for card/PIN and only then emits final response.
           rawSale = await this.runtime.sendAndRead(
             candidate,
-            Math.min(this.config.timeoutMs, this.config.saleResponseWaitMs),
+            Math.max(this.config.timeoutMs, this.config.saleResponseWaitMs),
           );
           if (rawSale) break;
         } catch (err) {
