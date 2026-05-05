@@ -536,7 +536,7 @@ class WorldlineServiceInstance {
       || this.config.POIID
       || this.config.poiid
       || this.runtime.detectedPoiId
-      || 'RX5000',
+      || 'KR539577',
     );
     const configuredSaleCommand = fillTemplate(this.config.saleTemplate, {
       amountMinor: session.amountMinor,
