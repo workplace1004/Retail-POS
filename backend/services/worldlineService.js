@@ -237,6 +237,16 @@ class CtepRuntime {
         if (size <= 10 && asciiPrintableCount <= 2) return true;
         return false;
       };
+      const isInterimProcessingFrame = (frame) => {
+        const size = frame?.length || 0;
+        if (size < 6) return false;
+        // Common C-TEP interim status observed on RX5000:
+        // starts with "MC" and contains TLV DF2D020002 (status "processing/pending").
+        const startsMc = frame[0] === 0x4d && frame[1] === 0x43; // "MC"
+        if (!startsMc) return false;
+        const tlv = Buffer.from([0xdf, 0x2d, 0x02, 0x00, 0x02]);
+        return frame.indexOf(tlv) >= 0;
+      };
       const acknowledgeFrame = () => {
         if (!this.socket || this.socket.destroyed) return;
         try {
@@ -277,6 +287,14 @@ class CtepRuntime {
             bumpIdle();
             return;
           }
+          if (isInterimProcessingFrame(frame)) {
+            wlLog('Ignoring interim processing frame while waiting final response', {
+              bytes: frame.length,
+              preview: text.slice(0, 120),
+            });
+            bumpIdle();
+            return;
+          }
           finish(resolve, frame);
         }, 900);
       };
@@ -305,6 +323,13 @@ class CtepRuntime {
             }
             if (isIgnorableControlFrame(frame, text)) {
               wlLog('Ignoring control frame while waiting response', {
+                bytes: frame.length,
+                preview: text.slice(0, 120),
+              });
+              continue;
+            }
+            if (isInterimProcessingFrame(frame)) {
+              wlLog('Ignoring interim processing frame while waiting final response', {
                 bytes: frame.length,
                 preview: text.slice(0, 120),
               });
