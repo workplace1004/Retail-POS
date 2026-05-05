@@ -726,31 +726,44 @@ class WorldlineServiceInstance {
         throw lastErr || new Error('Recovery command did not return a response');
       };
 
-      const resetCommand =
-        fillTemplate(this.config.resetTemplate, { reference: session.reference, sessionId })
-        || buildCtepCommand('RESET_TRANSACTION');
-      await tryCommandAcrossTransports(resetCommand, 6000, 2).catch(() => null);
+      try {
+        const resetCommand =
+          fillTemplate(this.config.resetTemplate, { reference: session.reference, sessionId })
+          || buildCtepCommand('RESET_TRANSACTION');
+        await tryCommandAcrossTransports(resetCommand, 6000, 2).catch(() => null);
 
-      const lastStatusCommand =
-        fillTemplate(this.config.lastStatusTemplate, { reference: session.reference, sessionId })
-        || buildCtepCommand('LAST_TRANSACTION_STATUS');
-      const rawLast = await tryCommandAcrossTransports(lastStatusCommand, 10000, 3);
-      const lastText = deframeToText(rawLast);
-      wlLog('Decoded LAST_TRANSACTION_STATUS response text', { text: lastText.slice(0, 2000) });
-      const recovered = this.classifyResponseText(lastText);
-      if (recovered.state === 'APPROVED' || recovered.state === 'DECLINED') {
+        const lastStatusCommand =
+          fillTemplate(this.config.lastStatusTemplate, { reference: session.reference, sessionId })
+          || buildCtepCommand('LAST_TRANSACTION_STATUS');
+        const rawLast = await tryCommandAcrossTransports(lastStatusCommand, 10000, 3);
+        const lastText = deframeToText(rawLast);
+        wlLog('Decoded LAST_TRANSACTION_STATUS response text', { text: lastText.slice(0, 2000) });
+        const recovered = this.classifyResponseText(lastText);
+        if (recovered.state === 'APPROVED' || recovered.state === 'DECLINED') {
+          finish({
+            state: recovered.state,
+            message: `${recovered.message} (Recovered via last transaction status)`,
+            details: { raw: lastText.slice(0, 1200), recovered: true },
+          });
+          return;
+        }
         finish({
-          state: recovered.state,
-          message: `${recovered.message} (Recovered via last transaction status)`,
-          details: { raw: lastText.slice(0, 1200), recovered: true },
+          state: 'ERROR',
+          message: 'Sale uncertain and recovery did not return a final status.',
+          details: { saleRaw: saleText.slice(0, 1200), lastRaw: lastText.slice(0, 1200) },
         });
-        return;
+      } catch (recoveryErr) {
+        finish({
+          state: 'ERROR',
+          message:
+            'RX5000 did not return any business response for SALE/RESET/LAST_STATUS text commands. This terminal profile requires official Worldline EIK (C++ bridge) command mapping.',
+          details: {
+            saleRaw: saleText.slice(0, 1200),
+            recoveryError: recoveryErr?.message || String(recoveryErr),
+            needsBridge: true,
+          },
+        });
       }
-      finish({
-        state: 'ERROR',
-        message: 'Sale uncertain and recovery did not return a final status.',
-        details: { saleRaw: saleText.slice(0, 1200), lastRaw: lastText.slice(0, 1200) },
-      });
     } catch (err) {
       finish({
         state: 'ERROR',
