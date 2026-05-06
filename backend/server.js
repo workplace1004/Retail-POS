@@ -7125,31 +7125,33 @@ function finalReceiptTicketRows({
   paymentMethodLines,
 }) {
   const sep = { text: '------------------------------', size: 'normal', bold: false, strike: false };
+  const bodySize = 'normal';
   const rows = [
-    { text: title, size: 'double', bold: true, strike: false },
-    ...headerLines.map((t) => ({ text: t, size: 'double', bold: false, strike: false })),
+    { text: title, size: bodySize, bold: true, strike: false },
+    ...headerLines.map((t) => ({ text: t, size: bodySize, bold: false, strike: false })),
   ];
-  if (printerLine) rows.push({ text: printerLine, size: 'double', bold: false, strike: false });
+  if (printerLine) rows.push({ text: printerLine, size: bodySize, bold: false, strike: false });
   rows.push(
     sep,
     ...receiptPrintParts.map((p) => ({
       text: p.text,
       strike: !!p.strike,
-      size: 'double',
+      size: bodySize,
       bold: false,
     })),
     sep,
-    { text: `SUBTOTAL: ${formatPrinterEuroAmount(dbTotal)}`, size: 'double', bold: true, strike: false },
+    { text: `SUBTOTAL: ${formatPrinterEuroAmount(dbTotal)}`, size: bodySize, bold: true, strike: false },
     ...vatSummary.lines.map((entry) => ({
       text: entry.display,
-      size: 'double',
+      size: bodySize,
       bold: false,
       strike: false,
     })),
-    { text: `BTW: ${formatPrinterEuroAmount(vatSummary.totalVat)}`, size: 'double', bold: true, strike: false },
-    { text: `TOTAL: ${formatPrinterEuroAmount(dbTotal)}`, size: 'triple', bold: true, strike: false },
-    { text: `PAID: ${formatPrinterEuroAmount(paidTotal)}`, size: 'triple', bold: true, strike: false },
-    ...paymentMethodLines.map((t) => ({ text: t, size: 'double', bold: false, strike: false })),
+    { text: `BTW: ${formatPrinterEuroAmount(vatSummary.totalVat)}`, size: bodySize, bold: true, strike: false },
+    // Keep only TOTAL slightly bigger than the rest, as requested.
+    { text: `TOTAL: ${formatPrinterEuroAmount(dbTotal)}`, size: 'double', bold: true, strike: false },
+    { text: `PAID: ${formatPrinterEuroAmount(paidTotal)}`, size: bodySize, bold: true, strike: false },
+    ...paymentMethodLines.map((t) => ({ text: t, size: bodySize, bold: false, strike: false })),
   );
   return rows;
 }
