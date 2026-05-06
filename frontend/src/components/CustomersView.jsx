@@ -50,8 +50,8 @@ export function CustomersView({
 
   const fetchCustomers = useCallback(async () => {
     try {
-      // Always load full list; sidebar search filters locally in UI.
-      const res = await fetch(`${API}/customers`);
+      // Full list; no server-side search — sidebar quick search filters in the UI.
+      const res = await fetch(`${API}/customers`, { cache: 'no-store' });
       const data = res.ok ? await res.json() : [];
       setCustomers(Array.isArray(data) ? data : []);
     } catch {
@@ -63,10 +63,36 @@ export function CustomersView({
     fetchCustomers();
   }, [fetchCustomers]);
 
+  /** If the order still references a customer that is missing from the list, fetch that row (edge cases / race). */
   useEffect(() => {
-    const id = orderCustomer?.id;
+    const id = orderCustomer?.id != null ? String(orderCustomer.id).trim() : '';
+    if (!id) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/customers/${encodeURIComponent(id)}`, { cache: 'no-store' });
+        if (!res.ok || cancelled) return;
+        const one = await res.json();
+        if (!one?.id || cancelled) return;
+        setCustomers((prev) => {
+          if (prev.some((c) => c.id === one.id)) return prev;
+          return [...prev, one].sort((a, b) =>
+            String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' })
+          );
+        });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderCustomer?.id, API]);
+
+  useEffect(() => {
+    const id = orderCustomer?.id != null ? String(orderCustomer.id).trim() : '';
     if (!id || !customers.length) return;
-    const match = customers.find((c) => c.id === id);
+    const match = customers.find((c) => String(c.id) === id);
     if (match) setSelectedCustomer(match);
   }, [orderCustomer?.id, customers]);
 
@@ -141,8 +167,10 @@ export function CustomersView({
   };
 
   const scrollList = (direction) => {
-    if (!listRef.current) return;
-    listRef.current.scrollBy({ top: direction * 120, behavior: 'smooth' });
+    const el = listRef.current;
+    if (!el) return;
+    const step = Math.max(96, Math.round(el.clientHeight * 0.72));
+    el.scrollBy({ top: direction * step, behavior: 'smooth' });
   };
 
   const mapCustomerToForm = (customer) => {
@@ -241,9 +269,11 @@ export function CustomersView({
   ];
   const selectedPriceGroupOption = priceGroupOptions.find((option) => option.value === newCustomerForm.priceGroup) || priceGroupOptions[0];
   const visibleCustomers = normalizedQuickSearch
-    ? customers.filter((customer) => [customer.companyName, customer.name, customer.street, customer.phone]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(normalizedQuickSearch)))
+    ? customers.filter((customer) =>
+        [customer.companyName, customer.name, customer.street, customer.phone, customer.email]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(normalizedQuickSearch))
+      )
     : customers;
 
   return (
@@ -365,9 +395,12 @@ export function CustomersView({
                 <div>{t('customersPhone')}:</div>
               </div>
 
-              <div className="flex-1 min-h-0 bg-pos-bg border border-pos-panel rounded-md overflow-hidden">
+              <div
+                ref={listRef}
+                className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-pos-bg border border-pos-panel rounded-md scroll-smooth"
+              >
                 <table className="w-full border-collapse text-sm">
-                  <tbody ref={listRef} className="block max-h-full overflow-auto">
+                  <tbody>
                     {visibleCustomers.map((c) => (
                       <tr
                         key={c.id}

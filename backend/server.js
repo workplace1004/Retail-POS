@@ -33,6 +33,8 @@ import {
   verifyWebpanelPassword,
   hashWebpanelPassword,
 } from './lib/webpanelAuth.js';
+import { buildPaidOrderInvoiceRequestBody } from './lib/orderInvoiceFromPaidOrder.js';
+import { renderInvoiceDocPdfBuffer } from './lib/renderInvoicePdfKit.js';
 import { signPosTerminalJwt, verifyPosTerminalJwt } from './lib/posTerminalAuth.js';
 
 const WEBPANEL_AVATAR_MAX_LEN = 500000;
@@ -1570,6 +1572,57 @@ function normalizeInvoicingDocumentSavePayload(body) {
   };
 }
 
+/** Create invoicing row from a paid order (used by POS email + webpanel listing). */
+async function createPaidOrderInvoicingDocumentInTx(tx, order, opts) {
+  let flatBody;
+  try {
+    flatBody = buildPaidOrderInvoiceRequestBody(order);
+  } catch (e) {
+    const err = new Error(e?.message || 'Invalid order for invoice.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const normalized = normalizeInvoicingDocumentSavePayload(flatBody);
+  if (normalized.error) {
+    const err = new Error(normalized.error);
+    err.statusCode = 400;
+    throw err;
+  }
+  const v = normalized.value;
+  /** Webpanel listing: document starts unpaid so staff can record payment there (POS sale is separate). */
+  let alreadyPaid = v.alreadyPaid;
+  let dueAmount = v.dueAmount;
+  if (opts?.documentPaymentAsOpen) {
+    alreadyPaid = 0;
+    dueAmount = v.totalIncl;
+  }
+  const agg = await tx.invoicingDocument.aggregate({ _max: { displayNumber: true } });
+  const displayNumber = (agg._max.displayNumber ?? 0) + 1;
+  return tx.invoicingDocument.create({
+    data: {
+      displayNumber,
+      kind: v.kind,
+      layout: v.layout,
+      docLang: v.docLang,
+      paymentTerm: v.paymentTerm,
+      paymentMethod: v.paymentMethod,
+      documentDate: v.documentDate,
+      alreadyPaid,
+      notes: v.notes,
+      attachmentPos: v.attachmentPos,
+      attachmentText: v.attachmentText,
+      customerId: v.customerId,
+      customerJson: v.customerJsonStr,
+      itemsJson: v.itemsJsonStr,
+      subtotalExcl: v.subtotalExcl,
+      vatTotal: v.vatTotal,
+      totalIncl: v.totalIncl,
+      dueAmount,
+      excludeFromWebpanelListing: Boolean(opts?.excludeFromWebpanelListing),
+    },
+  });
+}
+
 app.post('/api/webpanel/invoicing/documents', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
   if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
@@ -1684,6 +1737,7 @@ app.get('/api/webpanel/invoicing/documents', async (req, res) => {
       where: {
         kind: { in: kinds },
         documentDate: { gte, lt },
+        excludeFromWebpanelListing: { not: true },
       },
       orderBy: [{ documentDate: 'desc' }, { displayNumber: 'desc' }],
       select: {
@@ -1797,6 +1851,113 @@ app.patch('/api/webpanel/invoicing/documents/:id/payment', async (req, res) => {
   }
 });
 
+/** Shared Resend delivery (webpanel + POS). */
+async function deliverInvoicePdfWithResend(prismaClient, doc, pdfBase64, fileName) {
+  const id = doc.id;
+  const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const fromEmail = String(process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
+  if (!resendApiKey) {
+    const err = new Error('RESEND_API_KEY is not configured on server.');
+    err.statusCode = 500;
+    throw err;
+  }
+  if (!isValidWebpanelEmail(fromEmail)) {
+    const err = new Error('RESEND_FROM_EMAIL is invalid.');
+    err.statusCode = 500;
+    throw err;
+  }
+
+  let customerEmail = resolveInvoicingCustomerEmail(doc);
+  if (!customerEmail && doc.customerId) {
+    const customer = await prismaClient.customer.findUnique({
+      where: { id: doc.customerId },
+      select: { email: true },
+    });
+    const rowEmail = String(customer?.email ?? '').trim();
+    if (isValidWebpanelEmail(rowEmail)) customerEmail = rowEmail;
+  }
+  if (!customerEmail) {
+    const err = new Error('Customer email is missing for this document.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const pdfBytesApprox = Math.floor((pdfBase64.length * 3) / 4);
+  console.log('[invoicing/send] sending via Resend', {
+    documentId: id,
+    displayNumber: doc.displayNumber,
+    to: customerEmail,
+    from: fromEmail,
+    attachment: fileName,
+    pdfBytesApprox,
+  });
+
+  const subject = `Invoice ${doc.displayNumber || doc.id}`;
+  let resendResponse = null;
+  let lastAxiosErr = null;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      resendResponse = await axios.post(
+        'https://api.resend.com/emails',
+        {
+          from: fromEmail,
+          to: [customerEmail],
+          subject,
+          html: `<p>Please find your invoice attached.</p><p>Invoice: <strong>${doc.displayNumber || doc.id}</strong></p>`,
+          attachments: [
+            {
+              filename: fileName,
+              content: pdfBase64,
+              content_type: 'application/pdf',
+            },
+          ],
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            'Content-Type': 'application/json',
+            Connection: 'close',
+          },
+          timeout: 180000,
+          maxBodyLength: 50 * 1024 * 1024,
+          maxContentLength: 50 * 1024 * 1024,
+        },
+      );
+      break;
+    } catch (attemptErr) {
+      if (!axios.isAxiosError(attemptErr)) throw attemptErr;
+      lastAxiosErr = attemptErr;
+      const status = Number(attemptErr.response?.status) || 0;
+      const retriableStatus = status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
+      const retriableCode =
+        attemptErr.code === 'ECONNRESET' ||
+        attemptErr.code === 'ECONNABORTED' ||
+        attemptErr.code === 'ETIMEDOUT' ||
+        attemptErr.code === 'EAI_AGAIN';
+      const shouldRetry = attempt < maxAttempts && (retriableStatus || retriableCode);
+      console.warn('[invoicing/send] resend attempt failed', {
+        attempt,
+        maxAttempts,
+        status,
+        code: attemptErr.code,
+        message: attemptErr.message,
+        willRetry: shouldRetry,
+      });
+      if (!shouldRetry) throw attemptErr;
+      await wait(750 * attempt);
+    }
+  }
+  if (!resendResponse && lastAxiosErr) throw lastAxiosErr;
+
+  console.log('[invoicing/send] Resend OK', {
+    documentId: id,
+    to: customerEmail,
+    resendEmailId: resendResponse?.data?.id ?? null,
+  });
+  return { ok: true, to: customerEmail, messageId: resendResponse?.data?.id ?? null };
+}
+
 app.post('/api/webpanel/invoicing/documents/:id/send', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
   const id = String(req.params.id ?? '').trim();
@@ -1804,24 +1965,12 @@ app.post('/api/webpanel/invoicing/documents/:id/send', async (req, res) => {
   if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
   if (!id) return res.status(400).json({ error: 'id is required' });
 
-  const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
-  const fromEmail = String(process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
-  if (!resendApiKey) {
-    console.warn('[invoicing/send] RESEND_API_KEY missing');
-    return res.status(500).json({ error: 'RESEND_API_KEY is not configured on server.' });
-  }
-  if (!isValidWebpanelEmail(fromEmail)) {
-    console.warn('[invoicing/send] RESEND_FROM_EMAIL invalid', { fromEmail });
-    return res.status(500).json({ error: 'RESEND_FROM_EMAIL is invalid.' });
-  }
-
   const pdfBase64 = normalizeBase64Attachment(req.body?.pdfBase64);
   if (!pdfBase64 || pdfBase64.length < 80) {
     console.warn('[invoicing/send] bad PDF payload', { documentId: id, base64Length: pdfBase64?.length ?? 0 });
     return res.status(400).json({ error: 'Valid PDF payload is required.' });
   }
   const fileName = safeInvoicingAttachmentName(req.body?.fileName);
-  const pdfBytesApprox = Math.floor((pdfBase64.length * 3) / 4);
   try {
     const doc = await prisma.invoicingDocument.findUnique({
       where: { id },
@@ -1836,96 +1985,13 @@ app.post('/api/webpanel/invoicing/documents/:id/send', async (req, res) => {
       console.warn('[invoicing/send] document not found', { documentId: id });
       return res.status(404).json({ error: 'Document not found' });
     }
-
-    let customerEmail = resolveInvoicingCustomerEmail(doc);
-    if (!customerEmail && doc.customerId) {
-      const customer = await prisma.customer.findUnique({
-        where: { id: doc.customerId },
-        select: { email: true },
-      });
-      const rowEmail = String(customer?.email ?? '').trim();
-      if (isValidWebpanelEmail(rowEmail)) customerEmail = rowEmail;
-    }
-    if (!customerEmail) {
-      console.warn('[invoicing/send] no customer email', { documentId: id, customerId: doc.customerId });
-      return res.status(400).json({ error: 'Customer email is missing for this document.' });
-    }
-
-    console.log('[invoicing/send] sending via Resend', {
-      documentId: id,
-      displayNumber: doc.displayNumber,
-      to: customerEmail,
-      from: fromEmail,
-      attachment: fileName,
-      pdfBytesApprox,
-    });
-
-    const subject = `Invoice ${doc.displayNumber || doc.id}`;
-    // Retry transient upstream/network failures (ECONNRESET, upstream 408/5xx) for large attachments.
-    let resendResponse = null;
-    let lastAxiosErr = null;
-    const maxAttempts = 3;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        resendResponse = await axios.post(
-          'https://api.resend.com/emails',
-          {
-            from: fromEmail,
-            to: [customerEmail],
-            subject,
-            html: `<p>Please find your invoice attached.</p><p>Invoice: <strong>${doc.displayNumber || doc.id}</strong></p>`,
-            attachments: [
-              {
-                filename: fileName,
-                content: pdfBase64,
-                content_type: 'application/pdf',
-              },
-            ],
-          },
-          {
-            headers: {
-              Authorization: `Bearer ${resendApiKey}`,
-              'Content-Type': 'application/json',
-              Connection: 'close',
-            },
-            timeout: 180000,
-            maxBodyLength: 50 * 1024 * 1024,
-            maxContentLength: 50 * 1024 * 1024,
-          },
-        );
-        break;
-      } catch (attemptErr) {
-        if (!axios.isAxiosError(attemptErr)) throw attemptErr;
-        lastAxiosErr = attemptErr;
-        const status = Number(attemptErr.response?.status) || 0;
-        const retriableStatus = status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
-        const retriableCode =
-          attemptErr.code === 'ECONNRESET' ||
-          attemptErr.code === 'ECONNABORTED' ||
-          attemptErr.code === 'ETIMEDOUT' ||
-          attemptErr.code === 'EAI_AGAIN';
-        const shouldRetry = attempt < maxAttempts && (retriableStatus || retriableCode);
-        console.warn('[invoicing/send] resend attempt failed', {
-          attempt,
-          maxAttempts,
-          status,
-          code: attemptErr.code,
-          message: attemptErr.message,
-          willRetry: shouldRetry,
-        });
-        if (!shouldRetry) throw attemptErr;
-        await wait(750 * attempt);
-      }
-    }
-    if (!resendResponse && lastAxiosErr) throw lastAxiosErr;
-
-    console.log('[invoicing/send] Resend OK', {
-      documentId: id,
-      to: customerEmail,
-      resendEmailId: resendResponse?.data?.id ?? null,
-    });
-    return res.json({ ok: true, to: customerEmail, messageId: resendResponse?.data?.id ?? null });
+    const result = await deliverInvoicePdfWithResend(prisma, doc, pdfBase64, fileName);
+    return res.json(result);
   } catch (err) {
+    const sc = Number(err.statusCode);
+    if (Number.isFinite(sc) && sc >= 400 && sc < 600 && err.message) {
+      return res.status(sc).json({ error: err.message });
+    }
     if (axios.isAxiosError(err)) {
       const status = Number(err.response?.status) || 502;
       const timedOut = err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''));
@@ -5589,6 +5655,7 @@ app.patch('/api/orders/:id', async (req, res) => {
     status,
     items,
     paymentBreakdown,
+    invoiceDelivery,
     customerName,
     customerId: customerIdBody,
     userId,
@@ -5613,6 +5680,10 @@ app.patch('/api/orders/:id', async (req, res) => {
     updates.itemBatchMetaJson = Array.isArray(itemBatchMeta)
       ? JSON.stringify(itemBatchMeta)
       : null;
+  }
+  if (invoiceDelivery !== undefined) {
+    const raw = String(invoiceDelivery || '').trim().toLowerCase();
+    updates.invoiceDelivery = raw === 'direct' || raw === 'webpanel' ? raw : null;
   }
   if (customerIdBody !== undefined) {
     if (customerIdBody === null || customerIdBody === '') {
@@ -5719,6 +5790,119 @@ app.patch('/api/orders/:id', async (req, res) => {
 
   io.emit('order:updated', order);
   res.json(order);
+});
+
+/** POS: create invoicing document from paid order, generate PDF, email customer (same Resend path as webpanel). */
+app.post('/api/orders/:orderId/send-invoice-email', async (req, res) => {
+  const orderId = String(req.params.orderId ?? '').trim();
+  if (!orderId) return res.status(400).json({ error: 'Order id is required.' });
+  try {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: true,
+        items: { include: { product: true } },
+      },
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (order.status !== 'paid') {
+      return res.status(400).json({ error: 'Order must be paid before sending an invoice.' });
+    }
+
+    const row = await prisma.$transaction(async (tx) =>
+      createPaidOrderInvoicingDocumentInTx(tx, order, { excludeFromWebpanelListing: true }),
+    );
+
+    const pdfBuffer = await renderInvoiceDocPdfBuffer(row);
+    const pdfBase64 = pdfBuffer.toString('base64');
+    if (!pdfBase64 || pdfBase64.length < 80) {
+      return res.status(500).json({ error: 'Failed to generate invoice PDF.' });
+    }
+    const fileName = safeInvoicingAttachmentName(`invoice-${row.displayNumber}`);
+
+    const docSlice = {
+      id: row.id,
+      displayNumber: row.displayNumber,
+      customerId: row.customerId,
+      customerJson: row.customerJson,
+    };
+
+    const result = await deliverInvoicePdfWithResend(prisma, docSlice, pdfBase64, fileName);
+    return res.json(result);
+  } catch (err) {
+    const sc = Number(err.statusCode);
+    if (Number.isFinite(sc) && sc >= 400 && sc < 600 && err.message) {
+      return res.status(sc).json({ error: err.message });
+    }
+    if (axios.isAxiosError(err)) {
+      const status = Number(err.response?.status) || 502;
+      const timedOut = err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''));
+      const resendError = timedOut
+        ? 'Sending invoice timed out (large PDF or slow network). Try again or use a smaller invoice preview.'
+        : (typeof err.response?.data === 'string' && err.response.data) ||
+          (typeof err.response?.data?.message === 'string' && err.response.data.message) ||
+          (typeof err.response?.data?.error === 'string' && err.response.data.error) ||
+          err.message ||
+          'Failed to send invoicing email';
+      console.error('[orders/send-invoice-email] Resend HTTP error', {
+        status,
+        code: err.code,
+        timedOut,
+        data: err.response?.data,
+        message: err.message,
+      });
+      return res.status(status >= 400 && status < 600 ? status : 502).json({ error: resendError });
+    }
+    console.error('POST /api/orders/:orderId/send-invoice-email', err);
+    return res.status(500).json({ error: err.message || 'Failed to send invoice email.' });
+  }
+});
+
+/** POS: create invoicing document from paid order so it appears in webpanel sales documents (no email). */
+app.post('/api/orders/:orderId/register-invoice-webpanel', async (req, res) => {
+  const orderId = String(req.params.orderId ?? '').trim();
+  if (!orderId) return res.status(400).json({ error: 'Order id is required.' });
+  try {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: true,
+        items: { include: { product: true } },
+      },
+    });
+    if (!order) return res.status(404).json({ error: 'Order not found.' });
+    if (order.status !== 'paid') {
+      return res.status(400).json({ error: 'Order must be paid before registering an invoice for the webpanel.' });
+    }
+
+    const row = await prisma.$transaction(async (tx) =>
+      createPaidOrderInvoicingDocumentInTx(tx, order, {
+        excludeFromWebpanelListing: false,
+        documentPaymentAsOpen: true,
+      }),
+    );
+
+    try {
+      io.emit('invoicing:documents-changed', { documentId: row.id });
+    } catch (emitErr) {
+      console.warn('[orders/register-invoice-webpanel] socket emit failed', emitErr);
+    }
+
+    return res.json({
+      id: row.id,
+      displayNumber: row.displayNumber,
+      totalIncl: row.totalIncl,
+      dueAmount: row.dueAmount,
+      alreadyPaid: row.alreadyPaid,
+    });
+  } catch (err) {
+    const sc = Number(err.statusCode);
+    if (Number.isFinite(sc) && sc >= 400 && sc < 600 && err.message) {
+      return res.status(sc).json({ error: err.message });
+    }
+    console.error('POST /api/orders/:orderId/register-invoice-webpanel', err);
+    return res.status(500).json({ error: err.message || 'Failed to register invoice for webpanel.' });
+  }
 });
 
 // REST: add item to order

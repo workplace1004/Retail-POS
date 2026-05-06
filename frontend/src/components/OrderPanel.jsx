@@ -1253,8 +1253,10 @@ export function OrderPanel({
   };
 
   /** After Cashmatic/Payworld (or when skipped): settle orders, print, reset. Used by PayDifferentlyModal and executePayModalConfirmation. */
-  const settleOrdersAfterTerminalPayment = async (methods, amounts, modalTargetTotal) => {
+  const settleOrdersAfterTerminalPayment = async (methods, amounts, modalTargetTotal, opts = {}) => {
     const modalTotal = roundCurrency(modalTargetTotal);
+    const skipAutoReceiptPrint =
+      opts?.invoiceDelivery === 'direct' || opts?.invoiceDelivery === 'webpanel';
     if (pendingSplitCheckout?.type === 'splitBill') {
         const paymentBreakdown = buildPaymentBreakdown(methods, amounts);
         const paidOrderIds = await settleSplitBillSelection(pendingSplitCheckout.lineIds || [], paymentBreakdown);
@@ -1264,24 +1266,28 @@ export function OrderPanel({
 
         let printedSuccessfully = true;
         let printResult = null;
-        try {
-          if (paidOrderIds.length === 1) {
-            const printAmounts = {};
-            for (const m of methods) {
-              const v = Number(amounts[m.id]) || 0;
-              if (v > 0.0001) printAmounts[m.id] = v;
+        if (!skipAutoReceiptPrint) {
+          try {
+            if (paidOrderIds.length === 1) {
+              const printAmounts = {};
+              for (const m of methods) {
+                const v = Number(amounts[m.id]) || 0;
+                if (v > 0.0001) printAmounts[m.id] = v;
+              }
+              printResult = await printTicketAutomatically(paidOrderIds[0], { amounts: printAmounts });
+            } else {
+              printResult = await printCombinedReceiptsAutomatically(paidOrderIds, paymentBreakdown);
             }
-            printResult = await printTicketAutomatically(paidOrderIds[0], { amounts: printAmounts });
-          } else {
-            printResult = await printCombinedReceiptsAutomatically(paidOrderIds, paymentBreakdown);
+          } catch (printErr) {
+            printedSuccessfully = false;
+            setPaymentErrorMessage(printErr?.message || 'Automatic ticket print failed.');
           }
-        } catch (printErr) {
-          printedSuccessfully = false;
-          setPaymentErrorMessage(printErr?.message || 'Automatic ticket print failed.');
         }
 
         await onPaymentCompleted?.(paidOrderIds);
-        if (printedSuccessfully) {
+        if (skipAutoReceiptPrint) {
+          setPaymentSuccessMessage(`Payment successful (${formatPaymentAmount(modalTotal)}).`);
+        } else if (printedSuccessfully) {
           setPaymentSuccessMessage(
             `Payment successful (${formatPaymentAmount(modalTotal)}). Receipt printed successfully${printResult?.printerName ? ` on ${printResult.printerName}` : ''}.`
           );
@@ -1321,28 +1327,110 @@ export function OrderPanel({
         await onStatusChange?.(
           paidOrderId,
           targetStatus,
-          withOrderActorUserId(orderPaymentBreakdown ? { paymentBreakdown: orderPaymentBreakdown } : {})
+          withOrderActorUserId({
+            ...(orderPaymentBreakdown ? { paymentBreakdown: orderPaymentBreakdown } : {}),
+            ...(opts?.invoiceDelivery === 'direct' || opts?.invoiceDelivery === 'webpanel'
+              ? { invoiceDelivery: opts.invoiceDelivery }
+              : {}),
+          }),
         );
       }
+
+      let invoiceSentToEmails = [];
+      let webpanelInvoiceRegisteredCount = 0;
+      if (opts?.invoiceDelivery === 'direct' && !useInPlanningForPayNow) {
+        for (const oid of targetOrderIds) {
+          try {
+            const r = await fetch(`${API}/orders/${encodeURIComponent(oid)}/send-invoice-email`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) {
+              throw new Error(d?.error || tr('orderPanel.invoiceEmailFailed', 'Failed to send invoice email.'));
+            }
+            if (d?.to) invoiceSentToEmails.push(String(d.to));
+          } catch (e) {
+            setPaymentErrorMessage(e?.message || tr('orderPanel.invoiceEmailFailed', 'Failed to send invoice email.'));
+          }
+        }
+        invoiceSentToEmails = [...new Set(invoiceSentToEmails)];
+      }
+      if (opts?.invoiceDelivery === 'webpanel' && !useInPlanningForPayNow) {
+        for (const oid of targetOrderIds) {
+          try {
+            const r = await fetch(`${API}/orders/${encodeURIComponent(oid)}/register-invoice-webpanel`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) {
+              throw new Error(
+                d?.error || tr('orderPanel.invoiceWebpanelRegisterFailed', 'Could not add invoice to webpanel.'),
+              );
+            }
+            webpanelInvoiceRegisteredCount += 1;
+          } catch (e) {
+            setPaymentErrorMessage(
+              e?.message || tr('orderPanel.invoiceWebpanelRegisterFailed', 'Could not add invoice to webpanel.'),
+            );
+          }
+        }
+      }
+
       await onPaymentCompleted?.(targetOrderIds);
       let printedSuccessfully = true;
       let printResult = null;
-      try {
-        if (targetOrderIds.length === 1) {
-          const printAmounts = {};
-          for (const m of methods) {
-            const v = Number(amounts[m.id]) || 0;
-            if (v > 0.0001) printAmounts[m.id] = v;
+      if (!skipAutoReceiptPrint) {
+        try {
+          if (targetOrderIds.length === 1) {
+            const printAmounts = {};
+            for (const m of methods) {
+              const v = Number(amounts[m.id]) || 0;
+              if (v > 0.0001) printAmounts[m.id] = v;
+            }
+            printResult = await printTicketAutomatically(targetOrderIds[0], { amounts: printAmounts });
+          } else {
+            printResult = await printCombinedReceiptsAutomatically(targetOrderIds, paymentBreakdown);
           }
-          printResult = await printTicketAutomatically(targetOrderIds[0], { amounts: printAmounts });
-        } else {
-          printResult = await printCombinedReceiptsAutomatically(targetOrderIds, paymentBreakdown);
+        } catch (printErr) {
+          printedSuccessfully = false;
+          setPaymentErrorMessage(printErr?.message || 'Automatic ticket print failed.');
         }
-      } catch (printErr) {
-        printedSuccessfully = false;
-        setPaymentErrorMessage(printErr?.message || 'Automatic ticket print failed.');
       }
-      if (printedSuccessfully) {
+      if (
+        opts?.invoiceDelivery === 'direct' &&
+        !useInPlanningForPayNow &&
+        invoiceSentToEmails.length > 0
+      ) {
+        const emailDisplay = invoiceSentToEmails.join(', ');
+        setPaymentSuccessMessage(
+          tr('orderPanel.invoiceSentToEmailSuccess', 'Sent invoice to {{email}} successfully').replace(
+            /\{\{email\}\}/g,
+            emailDisplay,
+          ),
+        );
+      } else if (
+        opts?.invoiceDelivery === 'webpanel' &&
+        !useInPlanningForPayNow &&
+        webpanelInvoiceRegisteredCount > 0
+      ) {
+        setPaymentSuccessMessage(
+          tr('orderPanel.invoiceRegisteredWebpanelSuccess', 'Invoice added to the webpanel list.'),
+        );
+      } else if (skipAutoReceiptPrint) {
+        const methodLines = methods
+          .map((m) => {
+            const v = Number(amounts[m.id]) || 0;
+            return v > 0.0001 ? `${m.name}: ${formatPaymentAmount(v)}` : null;
+          })
+          .filter(Boolean);
+        setPaymentSuccessMessage(
+          [`Payment successful (${formatPaymentAmount(modalTotal)}).`, methodLines.length ? methodLines.join(' | ') : '']
+            .filter(Boolean)
+            .join(' '),
+        );
+      } else if (printedSuccessfully) {
         const methodLines = methods
           .map((m) => {
             const v = Number(amounts[m.id]) || 0;
@@ -1355,12 +1443,13 @@ export function OrderPanel({
           `Receipt printed successfully${printResult?.printerName ? ` on ${printResult.printerName}` : ''}.`,
         ].filter(Boolean).join(' '));
       }
+      /** Close pay modal before checkout side-effects so child props (e.g. customer) do not retrigger PayDifferentlyModal init mid-frame. */
+      resetAfterSuccessfulPayment();
       if (useInPlanningForPayNow) {
         onOpenInPlanning?.();
       } else {
         await onAfterPaidCheckout?.();
       }
-      resetAfterSuccessfulPayment();
   };
 
   /** Shared by PayDifferentlyModal confirm and footer € (full Cash + confirm, no modal). */
@@ -1462,7 +1551,7 @@ export function OrderPanel({
   };
 
   return (
-    <aside className="w-1/4 shrink-0 flex flex-col px-2 py-1 bg-pos-bg border-l border-pos-border">
+    <aside className="relative w-1/4 shrink-0 flex flex-col px-2 py-1 bg-pos-bg border-l border-pos-border">
       <div className="flex flex-col bg-white rounded-lg overflow-hidden min-h-[50%]">
         {customerDisplayName ? (
           <div className="px-2 py-2 text-center border-b border-pos-border">
@@ -1808,6 +1897,7 @@ export function OrderPanel({
         onClose={handlePayDifferentlyClose}
         onProceedAfterTerminals={settleOrdersAfterTerminalPayment}
         onPaymentError={setPaymentErrorMessage}
+        showInvoiceButton={Boolean(order?.customer)}
       />
 
       {showPayworldStatusModal && (
@@ -2190,16 +2280,15 @@ export function OrderPanel({
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="payment-success-title"
+          aria-labelledby="payment-success-message"
         >
           <div
             className="bg-pos-panel rounded-lg shadow-xl px-10 py-8 max-w-3xl w-full mx-4 border border-pos-border"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 id="payment-success-title" className="text-3xl mb-6 font-semibold text-pos-text text-center">
-              {t('paymentSuccessfulTitle')}
-            </h2>
-            <p className="text-2xl text-pos-text text-center mb-8">{paymentSuccessMessage}</p>
+            <p id="payment-success-message" className="text-2xl text-pos-text text-center mb-8">
+              {paymentSuccessMessage}
+            </p>
             <div className="flex justify-center">
               <button
                 type="button"

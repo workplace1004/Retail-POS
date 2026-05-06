@@ -24,6 +24,7 @@ import {
 import { DataPagination } from "@/components/DataPagination";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { buildInvoicingPreviewPdfBase64, downloadInvoicingPreviewPdf } from "@/lib/invoicingPreviewPdf";
+import { getRealtimeSocket } from "@/lib/realtime";
 
 type InvoicingDocumentListRow = {
   id: string;
@@ -270,6 +271,17 @@ const Invoicing = () => {
     }
     prevNewDocOpen.current = newDocOpen;
   }, [newDocOpen, tab, loadDocuments]);
+
+  useEffect(() => {
+    const socket = getRealtimeSocket();
+    const onDocumentsChanged = () => {
+      if (tab === "docs") void loadDocuments();
+    };
+    socket.on("invoicing:documents-changed", onDocumentsChanged);
+    return () => {
+      socket.off("invoicing:documents-changed", onDocumentsChanged);
+    };
+  }, [tab, loadDocuments]);
 
   useEffect(() => {
     const tp = Math.max(1, Math.ceil(documents.length / docsPageSize) || 1);

@@ -135,6 +135,8 @@ export default function App() {
   const [focusedOrderId, setFocusedOrderId] = useState(null);
   const [focusedOrderInitialItemCount, setFocusedOrderInitialItemCount] = useState(0);
   const [showCustomersModal, setShowCustomersModal] = useState(false);
+  /** After checkout the paid order disappears from GET /orders, so currentOrder loses customer; keep last linked customer for modal highlight + list merge. */
+  const [customerModalAnchor, setCustomerModalAnchor] = useState(null);
   const [showSubtotalView, setShowSubtotalView] = useState(false);
   const [subtotalBreaks, setSubtotalBreaks] = useState([]); // after each click: item count at which we inserted a subtotal
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -195,6 +197,14 @@ export default function App() {
     appendSubproductNoteToItem,
     findProductByBarcode
   } = usePos(API, socket, focusedOrderId);
+
+  useEffect(() => {
+    const c = currentOrder?.customer;
+    if (!c?.id) return;
+    setCustomerModalAnchor(c);
+  }, [currentOrder?.customer?.id]);
+
+  const orderCustomerForModal = currentOrder?.customer ?? customerModalAnchor;
 
   const extendPriceDisplay = useExtendPriceDisplayEnabled();
   const customerDisplayTicketPayload = useMemo(
@@ -1076,14 +1086,16 @@ export default function App() {
             onClick={(e) => e.stopPropagation()}
           >
             <CustomersView
-              orderCustomer={currentOrder?.customer ?? null}
+              orderCustomer={orderCustomerForModal ?? null}
               onBack={() => setShowCustomersModal(false)}
               onSelectCustomer={async (customer) => {
                 if (!customer?.id) return;
+                setCustomerModalAnchor(customer);
                 await setOrderCustomer(customer.id);
                 setShowCustomersModal(false);
               }}
               onNoCustomer={async () => {
+                setCustomerModalAnchor(null);
                 await setOrderCustomer(null);
                 setShowCustomersModal(false);
               }}

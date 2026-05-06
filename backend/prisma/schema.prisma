@@ -222,6 +222,8 @@ model Order {
   printed               Boolean        @default(false) // whether In waiting order ticket was printed
   itemBatchBoundariesJson String?      // JSON array [3, 6, 9] = cumulative item counts per batch
   itemBatchMetaJson     String?        // JSON array [{userId, userName, createdAt}, ...] per batch
+  /// POS invoice checkout: `direct` (send immediately) or `webpanel` (send via web panel).
+  invoiceDelivery       String?
   items                 OrderItem[]
   payments              OrderPayment[]
   createdAt             DateTime       @default(now())
@@ -410,6 +412,8 @@ model InvoicingDocument {
   vatTotal        Float    @default(0)
   totalIncl       Float    @default(0)
   dueAmount       Float    @default(0)
+  /// When true, document exists for POS/email/PDF only — hidden from webpanel Invoices list.
+  excludeFromWebpanelListing Boolean @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

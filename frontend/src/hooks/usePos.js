@@ -468,6 +468,13 @@ export function usePos(API, socket, focusedOrderId = null) {
       if (status === 'paid' && options?.paymentBreakdown && typeof options.paymentBreakdown === 'object') {
         body.paymentBreakdown = options.paymentBreakdown;
       }
+      if (
+        options?.invoiceDelivery &&
+        (status === 'paid' || status === 'in_planning') &&
+        (options.invoiceDelivery === 'direct' || options.invoiceDelivery === 'webpanel')
+      ) {
+        body.invoiceDelivery = options.invoiceDelivery;
+      }
       if (options?.customerName !== undefined) {
         body.customerName = options.customerName;
       }
