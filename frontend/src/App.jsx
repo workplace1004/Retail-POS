@@ -619,6 +619,89 @@ export default function App() {
     [findProductByBarcode, handleAddProductWithSelectedTable]
   );
 
+  const handleAddVariousFromQuantityInput = useCallback(async (rawInputValue = null) => {
+    const parseAmount = (value) => {
+      const raw = String(value ?? '').trim();
+      if (!raw) return null;
+      const m = raw.match(/-?\d+(?:[.,]\d+)?/);
+      if (!m) return null;
+      const parsed = Number(m[0].replace(',', '.'));
+      if (!Number.isFinite(parsed) || parsed < 0) return null;
+      return parsed;
+    };
+    const domInputValue =
+      typeof document !== 'undefined'
+        ? document.getElementById('order-quantity-input')?.value
+        : '';
+    const amount =
+      parseAmount(rawInputValue) ??
+      parseAmount(quantityInput) ??
+      parseAmount(domInputValue) ??
+      0;
+    const normalizeVatRate = (value) => {
+      const raw = String(value ?? '').trim().replace('%', '');
+      const m = raw.match(/-?\d+(?:[.,]\d+)?/);
+      if (!m) return '12';
+      return String(Number(m[0].replace(',', '.')) || 12);
+    };
+    let variousVatRate = '12';
+    try {
+      const settingsRes = await fetch(`${API}/settings/system-settings`, {
+        headers: { ...posTerminalAuthHeaders() },
+        cache: 'no-store',
+      });
+      const settingsData = await settingsRes.json().catch(() => ({}));
+      variousVatRate = normalizeVatRate(settingsData?.value?.vatRateVariousProducts);
+    } catch {
+      // keep default 12
+    }
+
+    const normalize = (value) => String(value || '').toLowerCase().trim();
+    let candidate = products.find((p) => normalize(p?.name) === 'various') || null;
+
+    // If not present yet, create a fixed "Various" product in the active category.
+    if (!candidate?.id) {
+      const categoryId = String(selectedCategoryId || '').trim();
+      if (!categoryId) return;
+      const createRes = await fetch(`${API}/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...posTerminalAuthHeaders() },
+        body: JSON.stringify({
+          categoryId,
+          name: 'Various',
+          price: 0,
+          openPrice: true,
+          vatTakeOut: variousVatRate,
+        }),
+      });
+      const created = await createRes.json().catch(() => null);
+      if (!createRes.ok || !created?.id) return;
+      candidate = created;
+      try {
+        await fetchProducts(categoryId, { force: true });
+      } catch {
+        // best-effort refresh only
+      }
+    }
+
+    if (!candidate?.id) return;
+
+    if (normalizeVatRate(candidate?.vatTakeOut) !== variousVatRate) {
+      try {
+        await fetch(`${API}/products/${encodeURIComponent(candidate.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...posTerminalAuthHeaders() },
+          body: JSON.stringify({ vatTakeOut: variousVatRate }),
+        });
+      } catch {
+        // best effort; continue adding item
+      }
+    }
+
+    await addItemToOrder(candidate, 1, { linePrice: amount });
+    setQuantityInput('');
+  }, [quantityInput, products, addItemToOrder, selectedCategoryId, fetchProducts]);
+
   if (licenseUi === 'checking') {
     return (
       <div className="flex h-full min-h-[100dvh] w-full items-center justify-center bg-pos-bg">
@@ -737,6 +820,11 @@ export default function App() {
           currentUser={user}
           customersActive={showCustomersModal}
           onCustomersClick={() => setShowCustomersModal(true)}
+          onVariousClick={() => {
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('pos-various-click'));
+            }
+          }}
           showSubtotalView={showSubtotalView}
           subtotalButtonDisabled={subtotalButtonDisabled}
           onSubtotalClick={handleSubtotalClick}
@@ -792,6 +880,9 @@ export default function App() {
         }}
         barcodeScanPaused={barcodeScanPaused}
         onApplyScannedBarcode={handleApplyScannedBarcode}
+        onVariousRequested={(raw) => {
+          void handleAddVariousFromQuantityInput(raw);
+        }}
       />
       <WebordersModal
         open={showOrdersModal}

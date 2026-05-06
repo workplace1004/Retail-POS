@@ -46,7 +46,7 @@ export const OPTION_BUTTON_ITEMS = [
   { id: "prijs-groep", labelKey: "control.optionButton.priceGroup", fallbackLabel: "Price group" },
   { id: "discount", labelKey: "control.optionButton.discount", fallbackLabel: "Discount" },
   { id: "kadobon", labelKey: "control.optionButton.giftVoucher", fallbackLabel: "Gift voucher" },
-  { id: "various", labelKey: "control.optionButton.various", fallbackLabel: "Miscellaneous" },
+  { id: "various", labelKey: "control.optionButton.various", fallbackLabel: "Various" },
   { id: "plu", labelKey: "control.optionButton.plu", fallbackLabel: "PLU" },
   { id: "product-zoeken", labelKey: "control.optionButton.searchProduct", fallbackLabel: "Search Product" },
   { id: "lade", labelKey: "control.optionButton.drawer", fallbackLabel: "Drawer" },

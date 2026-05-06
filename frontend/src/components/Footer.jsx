@@ -30,7 +30,7 @@ const OPTION_BUTTON_LABELS = {
   'prijs-groep': { key: 'control.optionButton.priceGroup', fallback: 'Price\ngroup' },
   discount: { key: 'control.optionButton.discount', fallback: 'Discount' },
   kadobon: { key: 'control.optionButton.giftVoucher', fallback: 'Gift voucher' },
-  various: { key: 'control.optionButton.various', fallback: 'Miscellaneous' },
+  various: { key: 'control.optionButton.various', fallback: 'Various' },
   plu: { key: 'control.optionButton.plu', fallback: 'PLU' },
   'product-zoeken': { key: 'control.optionButton.searchProduct', fallback: 'Search\nProduct' },
   lade: { key: 'control.optionButton.drawer', fallback: 'Drawer' },
@@ -56,6 +56,7 @@ export function Footer({
   currentUser = null,
   customersActive = false,
   onCustomersClick,
+  onVariousClick,
   showSubtotalView,
   subtotalButtonDisabled,
   onSubtotalClick,
@@ -207,6 +208,10 @@ export function Footer({
     }
     if (id === 'discount') {
       setShowDiscountModal(true);
+      return;
+    }
+    if (id === 'various') {
+      onVariousClick?.();
       return;
     }
     if (id === 'check-in-out') {

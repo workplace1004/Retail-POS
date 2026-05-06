@@ -162,7 +162,7 @@ export const translations = {
     'control.optionButton.priceGroup': 'Price group',
     'control.optionButton.discount': 'Discount',
     'control.optionButton.giftVoucher': 'Gift voucher',
-    'control.optionButton.various': 'Miscellaneous',
+    'control.optionButton.various': 'Various',
     'control.optionButton.plu': 'PLU',
     'control.optionButton.searchProduct': 'Search Product',
     'control.optionButton.drawer': 'Drawer',

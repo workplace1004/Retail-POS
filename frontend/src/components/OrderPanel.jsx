@@ -229,6 +229,7 @@ export function OrderPanel({
   onOpenInPlanning,
   onOpenInWaiting,
   onSaveInWaitingAndReset,
+  onVariousRequested,
   focusedOrderId = null,
   focusedOrderInitialItemCount = 0,
   /** When true, USB wedge barcode input is ignored (e.g. another surface modal is open). */
@@ -393,6 +394,17 @@ export function OrderPanel({
     paymentSuccessMessage
   ]);
 
+  useEffect(() => {
+    if (typeof onVariousRequested !== 'function') return undefined;
+    const onVariousClick = () => {
+      onVariousRequested(displayQuantity ?? '');
+    };
+    window.addEventListener('pos-various-click', onVariousClick);
+    return () => {
+      window.removeEventListener('pos-various-click', onVariousClick);
+    };
+  }, [onVariousRequested, displayQuantity]);
+
   const hasOrderItems = items.length > 0;
   const cashierName = currentUser?.label || currentUser?.name || 'admin';
   /** Attach logged-in cashier to order PATCH (paid / in_planning) so DB `Order.userId` is set. */
@@ -480,14 +492,14 @@ export function OrderPanel({
   const getItemNoteUnitTotal = (item) =>
     roundCurrency(getItemNotes(item).reduce((sum, note) => sum + (Number(note?.price) || 0), 0));
   const getItemBaseUnitPrice = (item) => {
-    if (item?.product?.weegschaal) {
-      const orderUnitPrice = Number(item?.price) || 0;
+    const orderUnitPrice = Number(item?.price);
+    if (Number.isFinite(orderUnitPrice)) {
+      // Use persisted order-item price first so custom-priced lines (e.g. Various) render correctly.
       return roundCurrency(Math.max(0, orderUnitPrice - getItemNoteUnitTotal(item)));
     }
     const productBase = Number(item?.product?.price);
     if (Number.isFinite(productBase)) return roundCurrency(productBase);
-    const orderUnitPrice = Number(item?.price) || 0;
-    return roundCurrency(Math.max(0, orderUnitPrice - getItemNoteUnitTotal(item)));
+    return 0;
   };
   const getItemBaseLinePrice = (item) => roundCurrency(getItemBaseUnitPrice(item) * getItemQuantity(item));
   const getItemNoteLinePrice = (item, note) => roundCurrency((Number(note?.price) || 0) * getItemQuantity(item));
@@ -1705,9 +1717,10 @@ export function OrderPanel({
         <span className='text-lg'>{t('total')}:&nbsp;€{payableTotal.toFixed(2)}</span>
         <div>
           <input
+            id="order-quantity-input"
             readOnly
             tabIndex={0}
-            className='w-[100px] h-full py-1.5 px-2 bg-white border-none rounded-md text-black text-xs outline-none cursor-pointer focus:border-green-500 focus:outline-none'
+            className='w-[100px] h-full py-1.5 px-2 bg-white border-none rounded-md text-black text-md outline-none cursor-pointer focus:border-green-500 focus:outline-none'
             type='text'
             value={displayQuantity}
             aria-label={t('enterAmountKeypad')}

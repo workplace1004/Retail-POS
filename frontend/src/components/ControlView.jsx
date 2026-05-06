@@ -2997,6 +2997,9 @@ export function ControlView({
   const applyDeviceSettingsRef = useRef(applyDeviceSettingsToState);
   applyDeviceSettingsRef.current = applyDeviceSettingsToState;
   const deviceSettingsHasLocalEditsRef = useRef(false);
+  const markDeviceSettingsEdited = useCallback(() => {
+    deviceSettingsHasLocalEditsRef.current = true;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -3216,6 +3219,7 @@ export function ControlView({
       const existingIndex = next.findIndex((id) => id === droppedId);
       if (existingIndex >= 0) next[existingIndex] = '';
       next[slotIndex] = droppedId;
+      markDeviceSettingsEdited();
       return normalizeFunctionButtonsLayout(next);
     });
     setSelectedFunctionButtonSlotIndex(slotIndex);
@@ -3227,6 +3231,7 @@ export function ControlView({
       const next = [...prev];
       if (!next[selectedFunctionButtonSlotIndex]) return prev;
       next[selectedFunctionButtonSlotIndex] = '';
+      markDeviceSettingsEdited();
       return normalizeFunctionButtonsLayout(next);
     });
     setSelectedFunctionButtonPoolItemId(null);
@@ -3264,6 +3269,7 @@ export function ControlView({
       const existingIndex = next.findIndex((id) => id === droppedId);
       if (existingIndex >= 0) next[existingIndex] = '';
       next[slotIndex] = droppedId;
+      markDeviceSettingsEdited();
       return next;
     });
     setSelectedOptionButtonSlotIndex(slotIndex);
@@ -3276,6 +3282,7 @@ export function ControlView({
       if (!next[selectedOptionButtonSlotIndex]) return prev;
       if (next[selectedOptionButtonSlotIndex] === OPTION_BUTTON_LOCKED_ID) return prev;
       next[selectedOptionButtonSlotIndex] = '';
+      markDeviceSettingsEdited();
       return next;
     });
     setSelectedOptionButtonPoolItemId(null);
@@ -3290,6 +3297,7 @@ export function ControlView({
       setOptionButtonSlots((prev) => {
         const next = [...prev];
         next[slotIndex] = selectedOptionButtonPoolItemId;
+        markDeviceSettingsEdited();
         return next;
       });
       setSelectedOptionButtonPoolItemId(null);
@@ -3304,6 +3312,7 @@ export function ControlView({
         const targetId = next[slotIndex];
         next[selectedOptionButtonSlotIndex] = targetId || '';
         next[slotIndex] = sourceId;
+        markDeviceSettingsEdited();
         return next;
       });
       setSelectedOptionButtonSlotIndex(null);
@@ -3325,6 +3334,7 @@ export function ControlView({
       setFunctionButtonSlots((prev) => {
         const next = [...prev];
         next[slotIndex] = selectedFunctionButtonPoolItemId;
+        markDeviceSettingsEdited();
         return normalizeFunctionButtonsLayout(next);
       });
       setSelectedFunctionButtonPoolItemId(null);
@@ -3338,6 +3348,7 @@ export function ControlView({
         const targetId = next[slotIndex];
         next[selectedFunctionButtonSlotIndex] = targetId || '';
         next[slotIndex] = sourceId;
+        markDeviceSettingsEdited();
         return normalizeFunctionButtonsLayout(next);
       });
       setSelectedFunctionButtonSlotIndex(null);
