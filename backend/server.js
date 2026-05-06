@@ -6673,9 +6673,14 @@ function receiptItemBaseUnitPrice(item) {
   return Math.round(Math.max(0, orderUnit - noteUnitTotal) * 100) / 100;
 }
 
-function receiptPadLine(left, right, width = 40) {
-  const l = String(left || '');
+function receiptPadLine(left, right, width = 48) {
   const r = String(right || '');
+  const rawLeft = String(left || '');
+  const maxLeft = Math.max(1, width - r.length - 1);
+  const l =
+    rawLeft.length > maxLeft
+      ? `${rawLeft.slice(0, Math.max(0, maxLeft - 1))}~`
+      : rawLeft;
   const pad = Math.max(1, width - l.length - r.length);
   return `${l}${' '.repeat(pad)}${r}`;
 }
@@ -8707,6 +8712,18 @@ app.post('/api/printers/receipt', async (req, res) => {
     }
 
     const dbTotal = Math.round(order.items.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0) * 100) / 100;
+    const orderCreatedAt = new Date(order.createdAt || Date.now());
+    const dayStart = new Date(orderCreatedAt);
+    dayStart.setHours(0, 0, 0, 0);
+    const earlierOrdersToday = await prisma.order.count({
+      where: {
+        createdAt: {
+          gte: dayStart,
+          lt: orderCreatedAt,
+        },
+      },
+    });
+    const receiptSequenceNumber = earlierOrdersToday + 1;
     const paymentBreakdown = req.body?.paymentBreakdown || {};
     const { paidTotal, paymentMethodLines, paymentMethodsSummary } = await resolveReceiptPaymentBreakdown(paymentBreakdown, dbTotal);
     if (Math.abs(paidTotal - dbTotal) > 0.009) {
@@ -8738,7 +8755,7 @@ app.post('/api/printers/receipt', async (req, res) => {
     if (!validation.ok) return res.status(400).json({ error: validation.error });
     const vatSummary = buildReceiptVatSummary(itemLines);
     const receiptLines = finalReceiptTicketRows({
-      title: `Receipt ${order.id}`,
+      title: `Receipt ${receiptSequenceNumber}`,
       headerLines: [`Printed at ${printedAt}`, `Customer: ${order.customer?.name || '-'}`],
       printerLine: `Printer: ${mainPrinter.name || mainPrinter.id}`,
       receiptPrintParts: itemLines.flatMap((line) => line.receiptPrintParts),
