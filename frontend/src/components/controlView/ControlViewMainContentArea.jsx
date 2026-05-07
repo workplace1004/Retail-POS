@@ -7,7 +7,6 @@ import { ControlViewCategoriesProductsContent } from './ControlViewCategoriesPro
 import { ControlViewExternalSimpleDevices } from './ControlViewExternalSimpleDevices';
 import { ControlViewCashmatic } from './ControlViewCashmatic';
 import { ControlViewPayworld } from './ControlViewPayworld';
-import { ControlViewBancontactPro } from './ControlViewBancontactPro';
 import { ControlViewWorldlineCtep } from './ControlViewWorldlineCtep';
 import { ControlViewCcv } from './ControlViewCcv';
 import { ControlViewExternalPrinter } from './ControlViewExternalPrinter';
@@ -144,7 +143,6 @@ export function ControlViewMainContentArea({ ctx }) {
     handleSaveCcv,
     handleSaveViva,
     handleSaveWorldline,
-    handleSaveBancontactPro,
     handleSavePriceDisplay,
     handleSaveProductionTickets,
     handleSaveReportSettings,
@@ -212,17 +210,6 @@ export function ControlViewMainContentArea({ ctx }) {
     ccvWorkstationId,
     ccvKeyboardOnChange,
     ccvKeyboardValue,
-    bancontactProName,
-    setBancontactProName,
-    bancontactProApiKey,
-    setBancontactProApiKey,
-    bancontactProSandbox,
-    setBancontactProSandbox,
-    bancontactProCallbackUrl,
-    setBancontactProCallbackUrl,
-    setBancontactProActiveField,
-    bancontactProKeyboardOnChange,
-    bancontactProKeyboardValue,
     periodicReportEndDate,
     periodicReportEndTime,
     periodicReportLines,
@@ -271,7 +258,6 @@ export function ControlViewMainContentArea({ ctx }) {
     savingCcv,
     savingViva,
     savingWorldline,
-    savingBancontactPro,
     savingPriceDisplay,
     savingProdTickets,
     savingReportSettings,
@@ -2719,17 +2705,6 @@ export function ControlViewMainContentArea({ ctx }) {
                     >
                       {tr('control.external.creditCardType.worldline', 'Worldline')}
                     </button>
-                    <button
-                      type="button"
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        cardTerminalProvider === 'bancontactpro'
-                          ? 'bg-pos-bg text-pos-text'
-                          : 'text-pos-muted active:text-pos-text'
-                      }`}
-                      onClick={() => setCardTerminalProvider('bancontactpro')}
-                    >
-                      {tr('control.external.creditCardType.bancontactpro', 'Bancontact QR')}
-                    </button>
                   </div>
                 </div>
                 {cardTerminalProvider === 'ccv' ? (
@@ -2781,25 +2756,6 @@ export function ControlViewMainContentArea({ ctx }) {
                       handleSaveWorldline={handleSaveWorldline}
                       worldlineKeyboardValue={worldlineKeyboardValue}
                       worldlineKeyboardOnChange={worldlineKeyboardOnChange}
-                    />
-                  </div>
-                ) : cardTerminalProvider === 'bancontactpro' ? (
-                  <div className="w-full">
-                    <ControlViewBancontactPro
-                      tr={tr}
-                      bancontactProName={bancontactProName}
-                      setBancontactProName={setBancontactProName}
-                      setBancontactProActiveField={setBancontactProActiveField}
-                      bancontactProApiKey={bancontactProApiKey}
-                      setBancontactProApiKey={setBancontactProApiKey}
-                      bancontactProSandbox={bancontactProSandbox}
-                      setBancontactProSandbox={setBancontactProSandbox}
-                      bancontactProCallbackUrl={bancontactProCallbackUrl}
-                      setBancontactProCallbackUrl={setBancontactProCallbackUrl}
-                      savingBancontactPro={savingBancontactPro}
-                      handleSaveBancontactPro={handleSaveBancontactPro}
-                      bancontactProKeyboardValue={bancontactProKeyboardValue}
-                      bancontactProKeyboardOnChange={bancontactProKeyboardOnChange}
                     />
                   </div>
                 ) : (

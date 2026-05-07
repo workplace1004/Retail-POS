@@ -277,7 +277,7 @@ export function OrderPanel({
   const activePayworldProviderRef = useRef('payworld');
   const cancelPayworldRequestedRef = useRef(false);
 
-  const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline', 'bancontactpro'];
+  const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline'];
 
   const usbScanBufferRef = useRef('');
   const usbScanLastTsRef = useRef(0);
@@ -1498,10 +1498,6 @@ export function OrderPanel({
       const worldlineTotal = sumAmountsByIntegration(methods, amounts, 'worldline');
       if (worldlineTotal > 0) {
         await runCardTerminalPayment('worldline', worldlineTotal);
-      }
-      const bancontactproTotal = sumAmountsByIntegration(methods, amounts, 'bancontactpro');
-      if (bancontactproTotal > 0) {
-        await runCardTerminalPayment('bancontactpro', bancontactproTotal);
       }
       await settleOrdersAfterTerminalPayment(methods, amounts, modalTargetTotal);
     } catch (err) {

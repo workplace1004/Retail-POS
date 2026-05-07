@@ -4893,7 +4893,7 @@ export function ControlView({
       const raw = typeof localStorage !== 'undefined' && localStorage.getItem('pos_card_terminal_provider');
       if (!raw) return;
       const provider = String(raw).trim().toLowerCase();
-      if (provider === 'payworld' || provider === 'ccv' || provider === 'viva' || provider === 'worldline' || provider === 'bancontactpro') {
+      if (provider === 'payworld' || provider === 'ccv' || provider === 'viva' || provider === 'worldline') {
         setCardTerminalProvider(provider);
       }
     } catch (_) {

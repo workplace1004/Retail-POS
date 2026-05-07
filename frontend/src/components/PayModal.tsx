@@ -18,7 +18,7 @@ const PAY_METHOD_ICON_PNG = {
     generic: '/card.png',
 };
 
-const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline', 'bancontactpro'];
+const CARD_INTEGRATIONS = ['payworld', 'ccv', 'viva', 'viva-wallet', 'worldline'];
 const TERMINAL_CARD_INTEGRATIONS = new Set([
     'card',
     'payworld',
@@ -27,7 +27,6 @@ const TERMINAL_CARD_INTEGRATIONS = new Set([
     'viva-wallet',
     'worldline',
     'multisafepay',
-    'bancontactpro',
 ]);
 const MANUAL_CARD_INTEGRATIONS = new Set(['generic', 'manual_card']);
 
@@ -109,7 +108,9 @@ export function PayModal({
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || cancelled) return;
                 const list = Array.isArray(data?.data) ? data.data : [];
-                const sorted = [...list].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+                const sorted = [...list]
+                    .filter((m) => String(m?.integration || '').toLowerCase() !== 'bancontactpro')
+                    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
                 if (cancelled) return;
                 setActivePaymentMethods(sorted);
                 setPaymentAmounts(Object.fromEntries(sorted.map((m) => [m.id, 0])));
@@ -438,10 +439,6 @@ export function PayModal({
             const worldlineTotal = sumAmountsByIntegration(activePaymentMethods, paymentAmounts, 'worldline');
             if (worldlineTotal > 0) {
                 await runCardTerminalPayment('worldline', worldlineTotal);
-            }
-            const bancontactproTotal = sumAmountsByIntegration(activePaymentMethods, paymentAmounts, 'bancontactpro');
-            if (bancontactproTotal > 0) {
-                await runCardTerminalPayment('bancontactpro', bancontactproTotal);
             }
             await onProceedAfterTerminals(activePaymentMethods, paymentAmounts, payModalTargetTotal);
         } catch (err) {
