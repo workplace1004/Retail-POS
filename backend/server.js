@@ -1768,6 +1768,70 @@ app.get('/api/webpanel/invoicing/documents', async (req, res) => {
   }
 });
 
+app.get('/api/webpanel/invoicing/per-customer', async (req, res) => {
+  const actorId = webpanelUserIdFromBearer(req);
+  if (!actorId) return res.status(401).json({ error: 'Unauthorized' });
+  const scope = String(req.query.scope || 'open').toLowerCase();
+  const openOnly = scope === 'open';
+  const excludeSentIdsRaw = String(req.query.excludeSentIds || '').trim();
+  const excludeSentIds = excludeSentIdsRaw
+    ? [...new Set(excludeSentIdsRaw.split(',').map((v) => String(v || '').trim()).filter(Boolean))]
+    : [];
+  try {
+    const rows = await prisma.invoicingDocument.findMany({
+      where: {
+        excludeFromWebpanelListing: { not: true },
+        // "Open" in this per-customer view means "not sent yet".
+        ...(openOnly && excludeSentIds.length > 0 ? { id: { notIn: excludeSentIds } } : {}),
+      },
+      orderBy: [{ documentDate: 'desc' }, { displayNumber: 'desc' }],
+      select: {
+        id: true,
+        displayNumber: true,
+        documentDate: true,
+        customerId: true,
+        customerJson: true,
+        totalIncl: true,
+      },
+    });
+    const grouped = new Map();
+    for (const row of rows) {
+      const customer = parseInvoicingDocumentJson(row.customerJson, null);
+      const customerName = invoicingCustomerDisplayName(customer);
+      const customerId = String(row.customerId || '').trim();
+      const groupKey = customerId || customerName.toLowerCase();
+      const prev = grouped.get(groupKey);
+      if (prev) {
+        prev.totalIncl = Math.round((prev.totalIncl + (Number(row.totalIncl) || 0)) * 100) / 100;
+        prev.documents.push({
+          id: row.id,
+          displayNumber: row.displayNumber,
+          documentDate: row.documentDate.toISOString(),
+          totalIncl: Math.round((Number(row.totalIncl) || 0) * 100) / 100,
+        });
+      } else {
+        grouped.set(groupKey, {
+          customerKey: groupKey,
+          customerName,
+          totalIncl: Math.round((Number(row.totalIncl) || 0) * 100) / 100,
+          documents: [{
+            id: row.id,
+            displayNumber: row.displayNumber,
+            documentDate: row.documentDate.toISOString(),
+            totalIncl: Math.round((Number(row.totalIncl) || 0) * 100) / 100,
+          }],
+        });
+      }
+    }
+    const customers = [...grouped.values()]
+      .sort((a, b) => String(a.customerName || '').localeCompare(String(b.customerName || '')));
+    return res.json({ customers });
+  } catch (err) {
+    console.error('GET /api/webpanel/invoicing/per-customer', err);
+    return res.status(500).json({ error: err.message || 'Failed to list invoicing totals per customer' });
+  }
+});
+
 app.get('/api/webpanel/invoicing/documents/:id', async (req, res) => {
   const actorId = webpanelUserIdFromBearer(req);
   if (!actorId) return res.status(401).json({ error: 'Unauthorized' });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { format } from "date-fns";
-import { FileText, Plus, FileBarChart, Users as UsersIcon, Settings, ChevronRight, Pencil, Trash2, Save, Video, Check, Coins, Loader2 } from "lucide-react";
+import { FileText, Plus, FileBarChart, Users as UsersIcon, Settings, ChevronRight, ChevronDown, Pencil, Trash2, Save, Video, Check, Coins, Loader2 } from "lucide-react";
 import { AppLayout } from "@/components/AppLayout";
 import { PageHeader } from "@/components/PageHeader";
 import { TabsBar } from "@/components/TabsBar";
@@ -36,6 +36,18 @@ type InvoicingDocumentListRow = {
   alreadyPaid: number;
   customerName: string;
   sent?: boolean;
+};
+
+type InvoicingPerCustomerRow = {
+  customerKey: string;
+  customerName: string;
+  totalIncl: number;
+  documents?: Array<{
+    id: string;
+    displayNumber: number;
+    documentDate: string;
+    totalIncl: number;
+  }>;
 };
 
 const INVOICING_SENT_STORAGE_KEY = "invoicing_sent_document_ids_v1";
@@ -228,10 +240,10 @@ const Invoicing = () => {
 
   const yearOptions = Array.from({ length: 11 }).map((_, i) => String(2021 + i));
 
-  const customerRows = [
-    { name: "TestCustomer", total: "8.34" },
-    { name: "pospoint", total: "5.62" },
-  ];
+  const [customerRows, setCustomerRows] = useState<InvoicingPerCustomerRow[]>([]);
+  const [perLoading, setPerLoading] = useState(false);
+  const [perFetchError, setPerFetchError] = useState("");
+  const [expandedCustomerKeys, setExpandedCustomerKeys] = useState<Set<string>>(new Set());
 
   const loadDocuments = useCallback(async () => {
     setDocsLoading(true);
@@ -260,10 +272,42 @@ const Invoicing = () => {
     setDocsPage(1);
   }, [docTypeFilter, monthFilter, yearFilter]);
 
+  const loadPerCustomerRows = useCallback(async () => {
+    setPerLoading(true);
+    setPerFetchError("");
+    try {
+      const qs = new URLSearchParams({ scope: perTab });
+      if (perTab === "open") {
+        const sentIds = [...readSentDocumentIds()];
+        if (sentIds.length > 0) qs.set("excludeSentIds", sentIds.join(","));
+      }
+      const res = await apiRequest<{ customers?: InvoicingPerCustomerRow[] }>(
+        `/api/webpanel/invoicing/per-customer?${qs.toString()}`
+      );
+      const rows = Array.isArray(res?.customers) ? res.customers : [];
+      setCustomerRows(rows);
+      setExpandedCustomerKeys((prev) => {
+        const validKeys = new Set(rows.map((r) => r.customerKey));
+        return new Set([...prev].filter((k) => validKeys.has(k)));
+      });
+    } catch {
+      setCustomerRows([]);
+      setPerFetchError("err");
+      setExpandedCustomerKeys(new Set());
+    } finally {
+      setPerLoading(false);
+    }
+  }, [perTab]);
+
   useEffect(() => {
     if (tab !== "docs") return;
     void loadDocuments();
   }, [tab, loadDocuments]);
+
+  useEffect(() => {
+    if (tab !== "per") return;
+    void loadPerCustomerRows();
+  }, [tab, loadPerCustomerRows]);
 
   useEffect(() => {
     if (prevNewDocOpen.current && !newDocOpen && tab === "docs") {
@@ -276,12 +320,13 @@ const Invoicing = () => {
     const socket = getRealtimeSocket();
     const onDocumentsChanged = () => {
       if (tab === "docs") void loadDocuments();
+      if (tab === "per") void loadPerCustomerRows();
     };
     socket.on("invoicing:documents-changed", onDocumentsChanged);
     return () => {
       socket.off("invoicing:documents-changed", onDocumentsChanged);
     };
-  }, [tab, loadDocuments]);
+  }, [tab, loadDocuments, loadPerCustomerRows]);
 
   useEffect(() => {
     const tp = Math.max(1, Math.ceil(documents.length / docsPageSize) || 1);
@@ -297,6 +342,11 @@ const Invoicing = () => {
     const start = (perPage - 1) * perPageSize;
     return customerRows.slice(start, start + perPageSize);
   }, [customerRows, perPage, perPageSize]);
+
+  useEffect(() => {
+    const tp = Math.max(1, Math.ceil(customerRows.length / perPageSize) || 1);
+    if (perPage > tp) setPerPage(tp);
+  }, [customerRows.length, perPageSize, perPage]);
 
   const handlePaymentModalOpenChange = useCallback((open: boolean) => {
     if (!open) {
@@ -750,6 +800,11 @@ const Invoicing = () => {
 
       {tab === "per" && (
         <Card className="max-w-3xl mx-auto p-6 shadow-card">
+          {perFetchError ? (
+            <div className="px-2 py-2 text-sm text-destructive border-b border-border bg-destructive/5 mb-3">
+              {t("invoicingDocumentsLoadFailed")}
+            </div>
+          ) : null}
           <div className="flex items-center justify-center gap-16 border-b border-border pb-3 mb-5">
             <button
               onClick={() => setPerTab("all")}
@@ -777,15 +832,66 @@ const Invoicing = () => {
             <div />
           </div>
           <div className="divide-y divide-border">
-            {pagedCustomerRows.map((c) => (
-              <div key={c.name} className="grid grid-cols-[1fr_180px_40px] gap-4 px-2 py-3 items-center hover:bg-muted/30 transition-colors text-sm">
-                <div className="font-medium text-foreground">{c.name}</div>
-                <div className="text-right font-mono">{c.total}</div>
-                <div className="flex justify-end">
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
+            {perLoading ? (
+              <div className="flex justify-center py-16 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin opacity-60" />
               </div>
-            ))}
+            ) : customerRows.length === 0 ? (
+              <div className="px-5 py-12 text-center text-sm text-muted-foreground">
+                <UsersIcon className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                <p>{t("invoicingNoDocumentsList")}</p>
+              </div>
+            ) : (
+              pagedCustomerRows.map((c) => {
+                const isExpanded = expandedCustomerKeys.has(c.customerKey);
+                const docs = Array.isArray(c.documents) ? c.documents : [];
+                return (
+                  <div key={c.customerKey}>
+                    <button
+                      type="button"
+                      className="w-full grid grid-cols-[1fr_180px_40px] gap-4 px-2 py-3 items-center hover:bg-muted/30 transition-colors text-sm text-left"
+                      onClick={() => {
+                        setExpandedCustomerKeys((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(c.customerKey)) next.delete(c.customerKey);
+                          else next.add(c.customerKey);
+                          return next;
+                        });
+                      }}
+                    >
+                      <div className="font-medium text-foreground">{c.customerName}</div>
+                      <div className="text-right font-mono">{(Number(c.totalIncl) || 0).toFixed(2)}</div>
+                      <div className="flex justify-end">
+                        {isExpanded ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </div>
+                    </button>
+                    {isExpanded ? (
+                      <div className="mx-2 mb-2 border-t border-border/70">
+                        {docs.length === 0 ? (
+                          <div className="px-3 py-2 text-xs text-muted-foreground">—</div>
+                        ) : (
+                          docs.map((doc) => {
+                            const d = new Date(doc.documentDate);
+                            const dateStr = Number.isFinite(d.getTime()) ? format(d, "dd-MM-yyyy") : "—";
+                            return (
+                              <div key={doc.id} className="grid grid-cols-[120px_140px_1fr] gap-4 px-10 py-2 text-xs border-t border-border/40 first:border-t-0">
+                                <div className="font-mono">{doc.displayNumber}</div>
+                                <div>{dateStr}</div>
+                                <div className="text-right font-mono">{(Number(doc.totalIncl) || 0).toFixed(2)}</div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
           </div>
           <DataPagination
             page={perPage}
