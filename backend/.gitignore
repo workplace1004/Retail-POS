@@ -7,4 +7,4 @@ build/installer.ico
 electron-tray-launcher/main.cjs
 electron-tray-launcher/tray-icon.png
 node_modules/
-worldline-ctep-bridge/logs/ctep-browser-bridge.log
+worldline-ctep-bridge/logs
