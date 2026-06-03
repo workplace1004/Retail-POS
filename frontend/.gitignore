@@ -1,0 +1,60 @@
+# Dependencies (root, backend, device)
+node_modules/
+
+# Vite (React app)
+dist/
+.vite/
+vite.config.js.timestamp-*
+
+# Backend & device build artifacts (if any)
+backend/dist/
+device/dist/
+build/
+out/
+embedded-staging/
+
+# Prisma / SQLite (local dev)
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# TypeScript
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Tooling cache
+.eslintcache
+.turbo
+
+# Packaged launchers (e.g. pkg output RESPOS.exe)
+release/

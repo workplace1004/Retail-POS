@@ -1,0 +1,339 @@
+import { useEffect, useState } from "react";
+import { format, parseISO } from "date-fns";
+import { Printer, FileText, Coins, Send, X, Loader2 } from "lucide-react";
+import type { TranslationKey } from "@/lib/translations";
+import { translations } from "@/lib/translations";
+import { apiRequest } from "@/lib/api";
+import { INVOICING_PREVIEW_PRINT_AREA_ID } from "@/lib/invoicingPreviewPdf";
+
+export type SavedInvoicingDocumentDTO = {
+  id: string;
+  displayNumber: number;
+  kind: string;
+  layout: string;
+  docLang: string;
+  paymentTerm: string;
+  paymentMethod: string;
+  documentDate: string;
+  alreadyPaid: number;
+  notes: string;
+  attachmentPos: string;
+  attachmentText: string;
+  customerId: string | null;
+  customer: Record<string, unknown> | null;
+  items: Array<{
+    qty: number;
+    description: string;
+    totalIncl: number;
+    perPieceIncl: number;
+    perPieceExcl: number;
+    discount: number;
+    vat: number;
+  }>;
+  subtotalExcl: number;
+  vatTotal: number;
+  totalIncl: number;
+  dueAmount: number;
+};
+
+export type InvoicingPreviewLayout = {
+  companyInfoLines: string[];
+  footerText: string;
+  logoDataUrl: string;
+};
+
+type Props = {
+  document: SavedInvoicingDocumentDTO;
+  layout: InvoicingPreviewLayout | null;
+  t: (key: TranslationKey) => string;
+  onClose: () => void;
+  onPrint: () => void;
+  onDownloadPdf: () => void;
+  onPayments: () => void;
+  onSend: () => void;
+  sendLoading?: boolean;
+};
+
+function emailFromCustomerSnapshot(customer: Record<string, unknown> | null): string {
+  const raw = customer ? String(customer.email ?? "").trim() : "";
+  return raw.includes("@") ? raw : "";
+}
+
+function isDisplayableLogoUrl(raw: string | undefined | null): raw is string {
+  const s = String(raw ?? "").trim();
+  if (!s) return false;
+  return s.startsWith("data:image/") || s.startsWith("http://") || s.startsWith("https://");
+}
+
+function CustomerUnderInvoice({ customer }: { customer: Record<string, unknown> | null }) {
+  if (!customer) {
+    return <div className="text-xs text-muted-foreground">—</div>;
+  }
+  const lines = [
+    String(customer.name ?? "").trim(),
+    customer.subName != null ? String(customer.subName).trim() : "",
+    String(customer.street ?? "").trim(),
+    String(customer.postalCity ?? "").trim(),
+    String(customer.country ?? "").trim(),
+    String(customer.vatNumber ?? "").trim(),
+  ].filter((x) => x.length > 0 && x !== "-");
+  if (lines.length === 0) {
+    return <div className="text-xs text-muted-foreground">—</div>;
+  }
+  return (
+    <div className="mt-2 space-y-0.5 text-xs leading-snug text-foreground">
+      {lines.map((line, i) => (
+        <div key={i}>{line}</div>
+      ))}
+    </div>
+  );
+}
+
+function vatRowsFromItems(
+  items: SavedInvoicingDocumentDTO["items"],
+): { rate: number; amount: number; base: number }[] {
+  const map = new Map<number, { vat: number; base: number }>();
+  for (const it of items) {
+    const lineIncl = Number(it.totalIncl) || 0;
+    const lineExcl = (Number(it.perPieceExcl) || 0) * (Number(it.qty) || 0);
+    const vatAmt = Math.round((lineIncl - lineExcl) * 100) / 100;
+    const rate = Number(it.vat) || 0;
+    const cur = map.get(rate) ?? { vat: 0, base: 0 };
+    cur.vat += vatAmt;
+    cur.base += lineExcl;
+    map.set(rate, cur);
+  }
+  return [...map.entries()]
+    .map(([rate, v]) => ({ rate, amount: Math.round(v.vat * 100) / 100, base: Math.round(v.base * 100) / 100 }))
+    .sort((a, b) => a.rate - b.rate);
+}
+
+export function InvoicingDocumentPreview({
+  document,
+  layout,
+  t,
+  onClose,
+  onPrint,
+  onDownloadPdf,
+  onPayments,
+  onSend,
+  sendLoading = false,
+}: Props) {
+  const docLang = String(document.docLang || "").trim().toLowerCase();
+  const langBucket = docLang === "nl" || docLang === "en" ? docLang : "en";
+  const dict = translations[langBucket as "nl" | "en"];
+  const tt = (key: TranslationKey) => {
+    const localized = dict?.[key];
+    return typeof localized === "string" && localized.trim() ? localized : t(key);
+  };
+
+  const kindLabelKeyMap: Record<string, TranslationKey> = {
+    invoice: "docKindInvoice",
+    "invoice-tickets": "docKindInvoiceFromTickets",
+    quotation: "docKindQuotation",
+    credit: "docKindCreditNote",
+    delivery: "docKindDeliveryNote",
+  };
+  const docKindLabel = tt(kindLabelKeyMap[String(document.kind || "").trim().toLowerCase()] ?? "docKindInvoice");
+
+  const snapshotEmail = emailFromCustomerSnapshot(document.customer);
+
+  /** Snapshot email, or fetched from `/api/customers/:id` when snapshot omits email (older saves). */
+  const [resolvedMail, setResolvedMail] = useState<string | null>(() => {
+    if (snapshotEmail) return snapshotEmail;
+    return document.customerId?.trim() ? null : "";
+  });
+
+  useEffect(() => {
+    if (snapshotEmail) {
+      setResolvedMail(snapshotEmail);
+      return;
+    }
+    const cid = document.customerId?.trim();
+    if (!cid) {
+      setResolvedMail("");
+      return;
+    }
+    setResolvedMail(null);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const row = await apiRequest<Record<string, unknown>>(`/api/customers/${encodeURIComponent(cid)}`);
+        if (cancelled) return;
+        const e = String(row?.email ?? "").trim();
+        setResolvedMail(e.includes("@") ? e : "");
+      } catch {
+        if (!cancelled) setResolvedMail("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [document.customerId, snapshotEmail]);
+
+  const docDate = (() => {
+    try {
+      return format(parseISO(document.documentDate), "dd-MM-yyyy");
+    } catch {
+      return document.documentDate;
+    }
+  })();
+
+  const customerNr = document.customerId ? String(document.customerId).slice(0, 8) : "—";
+  const mailTo =
+    resolvedMail === null
+      ? tt("invoicingPreviewMailLoading")
+      : resolvedMail || tt("invoicingPreviewNoCustomerEmail");
+
+  /** All non-empty company lines from document layout settings (shown under logo, in order). */
+  const companyLines = (layout?.companyInfoLines ?? [])
+    .map((l) => String(l ?? "").trim())
+    .filter((l) => l.length > 0);
+  const logoRaw = layout?.logoDataUrl?.trim() ?? "";
+  const logoUrl = isDisplayableLogoUrl(logoRaw) ? logoRaw : null;
+  const footerText = (layout?.footerText ?? "").trim();
+
+  const vatRows = vatRowsFromItems(document.items);
+
+  return (
+    <div data-invoicing-print-content className="flex flex-col bg-background text-foreground max-h-[90vh]">
+      <div data-invoicing-print-skip className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 bg-muted/30">
+        <div className="flex flex-1 items-center justify-center gap-2 sm:gap-3">
+          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Print" onClick={onPrint}>
+            <Printer className="h-5 w-5" />
+          </button>
+          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="PDF" onClick={onDownloadPdf}>
+            <FileText className="h-5 w-5" />
+          </button>
+          <button type="button" className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label="Payments" onClick={onPayments}>
+            <Coins className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            className="h-10 w-10 inline-flex items-center justify-center rounded-md hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+            aria-label="Send"
+            aria-busy={sendLoading}
+            disabled={sendLoading}
+            onClick={onSend}
+          >
+            {sendLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+          </button>
+        </div>
+        <button type="button" className="h-10 w-10 shrink-0 inline-flex items-center justify-center rounded-md hover:bg-muted" aria-label={tt("invoicingPreviewClose")} onClick={onClose}>
+          <X className="h-7 w-7" />
+        </button>
+      </div>
+      <p data-invoicing-print-skip className="text-center text-sm text-muted-foreground py-2 border-b border-border">
+        {tt("invoicingPreviewMailPrefix")}
+        {mailTo}
+      </p>
+
+      <div data-invoicing-print-scroll className="overflow-y-auto flex-1 p-4 sm:p-6">
+        <div id={INVOICING_PREVIEW_PRINT_AREA_ID} className="mx-auto min-h-[480px] max-w-[720px] rounded-sm border border-border bg-background p-6 text-foreground shadow-sm sm:p-8">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-8 border-b border-border pb-4">
+            {/* Sender: logo + company info (document layout settings) */}
+            <div className="flex flex-col gap-2 max-w-[min(100%,320px)]">
+              {logoUrl ? (
+                <img
+                  src={logoUrl}
+                  alt=""
+                  className="h-20 w-auto max-w-[220px] border border-border bg-background object-contain object-left p-1"
+                />
+              ) : (
+                <div className="flex h-20 w-28 shrink-0 items-center justify-center rounded-sm bg-foreground">
+                  <span className="text-[10px] text-white text-center px-1">logo</span>
+                </div>
+              )}
+              <div className="space-y-0.5 text-xs leading-snug text-foreground">
+                {companyLines.length > 0 ? (
+                  companyLines.map((line, i) => (
+                    <div key={i}>{line}</div>
+                  ))
+                ) : (
+                  <div className="text-muted-foreground">—</div>
+                )}
+              </div>
+            </div>
+            {/* Document title + bill-to client */}
+            <div className="text-right text-sm flex-1 min-w-[200px]">
+              <div className="text-lg font-semibold leading-tight">
+                {docKindLabel} {document.displayNumber}
+              </div>
+              <CustomerUnderInvoice customer={document.customer} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs sm:text-sm mb-6">
+            <div>
+              <span className="text-muted-foreground">{tt("invoicingPreviewDate")}: </span>
+              <span className="font-medium">{docDate}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">{tt("invoicingPreviewExpiration")}: </span>
+              <span className="font-medium">{docDate}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">{tt("invoicingPreviewCustomerNr")}: </span>
+              <span className="font-medium">{customerNr}</span>
+            </div>
+          </div>
+
+          <table className="mb-6 w-full border-collapse border border-border text-xs sm:text-sm">
+            <thead>
+              <tr className="bg-muted/40">
+                <th className="border border-border p-2 text-left font-medium">{tt("invoicingPreviewAmount")}</th>
+                <th className="border border-border p-2 text-left font-medium">{tt("invoicingPreviewDescription")}</th>
+                <th className="border border-border p-2 text-right font-medium">{tt("invoicingPreviewPriceIncl")}</th>
+                <th className="border border-border p-2 text-right font-medium">{tt("invoicingPreviewPriceExcl")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {document.items.map((it, idx) => (
+                <tr key={idx}>
+                  <td className="border border-border p-2 align-top">{it.qty}</td>
+                  <td className="border border-border p-2 align-top">{it.description}</td>
+                  <td className="border border-border p-2 text-right font-mono align-top">{it.perPieceIncl.toFixed(2)}</td>
+                  <td className="border border-border p-2 text-right font-mono align-top">{it.perPieceExcl.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="flex justify-end">
+            <div className="w-full max-w-[280px] space-y-1 rounded border border-border p-3 text-sm">
+              <div className="flex justify-between gap-4">
+                <span>{tt("invoicingPreviewSubtotal")}</span>
+                <span className="font-mono">{document.subtotalExcl.toFixed(2)}</span>
+              </div>
+              {vatRows.map((row) => (
+                <div key={row.rate} className="flex justify-between gap-4">
+                  <span>
+                    {tt("btwShort")} {row.rate} %
+                  </span>
+                  <span className="font-mono">{row.amount.toFixed(2)}</span>
+                </div>
+              ))}
+              <div className="mt-1 flex justify-between gap-4 border-t border-border pt-1 font-semibold">
+                <span>{tt("totalEuro")}</span>
+                <span className="font-mono">{document.totalIncl.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span>{tt("alreadyPaid")}</span>
+                <span className="font-mono">{document.alreadyPaid.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between gap-4 text-xs pt-1">
+                <span>
+                  {tt("invoicingPreviewPayable")} {docDate}
+                </span>
+                <span className="font-mono font-medium">{document.dueAmount.toFixed(2)}</span>
+              </div>
+            </div>
+          </div>
+
+          {footerText && <p className="mt-6 text-xs text-muted-foreground">{footerText}</p>}
+          <p className="mt-4 text-xs text-muted-foreground">{tt("invoicingPreviewTerms")}</p>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,24 @@
+{
+  "name": "retail-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.1.2",
+    "babel-preset-expo": "~13.0.0",
+    "expo": "~53.0.0",
+    "expo-asset": "~11.1.7",
+    "expo-camera": "~16.1.11",
+    "expo-navigation-bar": "~4.2.8",
+    "expo-status-bar": "~2.2.3",
+    "expo-system-ui": "~5.0.11",
+    "react": "19.0.0",
+    "react-native": "0.79.6"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "pos-backend-tray",
+  "version": "1.0.0",
+  "description": "System tray launcher for POS Backend (generated files: main.cjs, tray-icon.png)",
+  "main": "main.cjs",
+  "private": true
+}

@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optimized for 1024×768 resolution */
+@layer base {
+  * {
+    @apply box-border;
+  }
+  html {
+    font-size: 15px;
+  }
+  body {
+    @apply m-0 font-sans bg-pos-bg text-pos-text overflow-hidden;
+    width: 100vw;
+    min-width: 1024px;
+    max-width: 1024px;
+    min-height: 768px;
+    max-height: 768px;
+    height: 100vh;
+  }
+  #root {
+    @apply h-full w-full;
+    min-width: 1024px;
+    max-width: 1024px;
+    min-height: 768px;
+    max-height: 768px;
+  }
+  button {
+    @apply cursor-pointer;
+    font-family: inherit;
+  }
+  input, select, textarea {
+    font-family: inherit;
+  }
+  input, textarea {
+    caret-color: #22c55e;
+  }
+  input:focus {
+    outline: none;
+    border-color: #22c55e;
+  }
+}
+
+/* Hide scrollbar while keeping scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Dark scrollbar for textarea in control views */
+.textarea-dark-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #64748b #2f4258;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar {
+  width: 12px;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar-track {
+  background: #2f4258;
+  border-radius: 9999px;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border: 2px solid #2f4258;
+  border-radius: 9999px;
+}
+
+.textarea-dark-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
