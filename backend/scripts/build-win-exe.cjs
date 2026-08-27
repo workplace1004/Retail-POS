@@ -74,6 +74,43 @@ function copyUnpackedToOut(unpackedDir, destDir) {
   fs.cpSync(unpackedDir, destDir, { recursive: true });
 }
 
+/** Collect every .js/.cjs/.mjs under dir, skipping node_modules. */
+function listSourceFiles(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules') continue;
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) listSourceFiles(p, out);
+    else if (/\.(js|cjs|mjs)$/.test(entry.name)) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Fail the build (not the packaged app at 4am) when a relative import has no file in the
+ * staged app — the failure mode is ERR_MODULE_NOT_FOUND after install, with no console.
+ */
+function verifyStagedImports(appDir) {
+  const relImport = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"](\.[^'"]*)['"]/g;
+  const missing = [];
+  for (const file of listSourceFiles(appDir)) {
+    const src = fs.readFileSync(file, 'utf8');
+    for (const m of src.matchAll(relImport)) {
+      const spec = m[1];
+      const target = path.resolve(path.dirname(file), spec);
+      const hit = fs.existsSync(target)
+        || ['.js', '.cjs', '.mjs', '.json'].some((ext) => fs.existsSync(target + ext));
+      if (!hit) missing.push(`${path.relative(appDir, file)} → ${spec}`);
+    }
+  }
+  if (missing.length) {
+    console.error('[build-win-exe] Staged app is missing files it imports:');
+    for (const line of missing) console.error('  -', line);
+    console.error('[build-win-exe] Add them to the copy step above and rebuild.');
+    process.exit(1);
+  }
+  console.log('[build-win-exe] Verified relative imports resolve in staged app.');
+}
+
 function copyNodeRuntime(destRuntimeDir) {
   if (process.platform !== 'win32') {
     console.error('[build-win-exe] Only Windows is supported (need node.exe + DLLs).');
@@ -155,16 +192,24 @@ async function main() {
   fs.mkdirSync(appDir, { recursive: true });
   copyFile(path.join(root, 'package.json'), path.join(appDir, 'package.json'));
   copyFile(path.join(root, 'package-lock.json'), path.join(appDir, 'package-lock.json'));
-  copyFile(path.join(root, 'server.js'), path.join(appDir, 'server.js'));
-  copyFile(path.join(root, 'periodicReportReceipt.js'), path.join(appDir, 'periodicReportReceipt.js'));
-  copyFile(path.join(root, 'financialReportReceipt.js'), path.join(appDir, 'financialReportReceipt.js'));
-  copyDir(path.join(root, 'services'), path.join(appDir, 'services'));
+  // Every top-level .js beside server.js (report builders etc.) — copied by scan so a new
+  // sibling module never silently drops out of the bundle.
+  for (const name of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!name.isFile() || !name.name.endsWith('.js')) continue;
+    copyFile(path.join(root, name.name), path.join(appDir, name.name));
+  }
+  for (const dir of ['services', 'lib', 'keys']) {
+    const src = path.join(root, dir);
+    if (fs.existsSync(src)) copyDir(src, path.join(appDir, dir));
+  }
   copyDir(path.join(root, 'prisma'), path.join(appDir, 'prisma'));
   const devDb = path.join(root, 'prisma', 'retail.db');
   if (fs.existsSync(devDb)) {
     copyFile(devDb, path.join(appDir, 'prisma', 'retail.db'));
     console.log('[build-win-exe] Copied prisma/retail.db');
   }
+
+  verifyStagedImports(appDir);
 
   console.log('[build-win-exe] npm ci --omit=dev …');
   runNpmCli('npm ci --omit=dev', appDir);

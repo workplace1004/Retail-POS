@@ -16,6 +16,7 @@ const FALLBACK_ICON_PNG = Buffer.from(
 let tray = null;
 let serverProcess = null;
 let serverLogPath = '';
+let dataDir = '';
 
 function candidateBundleRoots() {
   const roots = [];
@@ -75,11 +76,11 @@ function startServer() {
   }
 
   const { node, appDir } = bundle;
-  appendServerLog(`\n[${new Date().toISOString()}] Starting server cwd=${appDir} node=${node}\n`);
+  appendServerLog(`\n[${new Date().toISOString()}] Starting server cwd=${appDir} node=${node} data=${dataDir}\n`);
 
   serverProcess = spawn(node, ['server.js'], {
     cwd: appDir,
-    env: { ...process.env, NODE_ENV: process.env.NODE_ENV || 'production' },
+    env: { ...process.env, NODE_ENV: process.env.NODE_ENV || 'production', POS_DATA_DIR: dataDir },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
@@ -129,6 +130,12 @@ function createTray() {
           }
         },
       },
+      {
+        label: 'Open data folder…',
+        click: () => {
+          if (dataDir && fs.existsSync(dataDir)) shell.openPath(dataDir);
+        },
+      },
       { type: 'separator' },
       {
         label: 'Quit',
@@ -158,6 +165,22 @@ if (!gotLock) {
       serverLogPath = path.join(app.getPath('userData'), 'backend-server.log');
     } catch {
       serverLogPath = path.join(app.getPath('temp'), 'pos-backend-server.log');
+    }
+
+    // The app folder is unusable for the SQLite DB: a portable build re-extracts to a fresh
+    // temp dir every launch and an NSIS install lands under Program Files (read-only for a
+    // normal user). Keep the data beside the log, in the per-user app-data folder.
+    try {
+      dataDir = process.env.POS_DATA_DIR || path.join(app.getPath('userData'), 'data');
+      fs.mkdirSync(dataDir, { recursive: true });
+    } catch {
+      // Last resort only: temp is wiped, so the data would not survive — but the API still runs.
+      dataDir = path.join(app.getPath('temp'), 'pos-backend-data');
+      try {
+        fs.mkdirSync(dataDir, { recursive: true });
+      } catch {
+        dataDir = '';
+      }
     }
 
     if (!startServer()) {

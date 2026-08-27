@@ -36,6 +36,7 @@ import {
 import { buildPaidOrderInvoiceRequestBody } from './lib/orderInvoiceFromPaidOrder.js';
 import { renderInvoiceDocPdfBuffer } from './lib/renderInvoicePdfKit.js';
 import { signPosTerminalJwt, verifyPosTerminalJwt } from './lib/posTerminalAuth.js';
+import { resolveDatabaseUrl, sqliteFileFromUrl, syncSchemaSnapshot } from './lib/dataPaths.js';
 
 const WEBPANEL_AVATAR_MAX_LEN = 500000;
 
@@ -147,9 +148,13 @@ async function resolvePosRegisterIdForOrder(req) {
 
 /** POS REST API only: no license issuance/activation routes and no imports from a license server package. */
 
-const prisma = new PrismaClient();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Resolved before the client is constructed: packaged builds keep the DB outside the app folder.
+const DATABASE_URL = resolveDatabaseUrl(__dirname);
+syncSchemaSnapshot(__dirname);
+const prisma = new PrismaClient({ datasources: { db: { url: DATABASE_URL } } });
 
 /** KDS admin station (fixed id); login name `admin`, default PIN `1234` — not shown as a normal station tab. */
 const KITCHEN_KDS_ADMIN_ID = 'kitchen-kds-admin';
@@ -2420,11 +2425,14 @@ app.get('/api/scale/live-weight', async (req, res) => {
 
 async function resolveSqliteDbPath() {
   const candidates = [
+    // The DB the running server is actually connected to — outside the app folder in packaged
+    // builds, so backup export/import must not fall back to the stale bundled snapshot.
+    sqliteFileFromUrl(DATABASE_URL, __dirname),
     path.resolve(__dirname, 'prisma', 'retail.db'),
     path.resolve(process.cwd(), 'prisma', 'retail.db'),
     path.resolve(__dirname, 'retail.db'),
     path.resolve(process.cwd(), 'retail.db'),
-  ];
+  ].filter(Boolean);
   for (const candidate of candidates) {
     try {
       await access(candidate);
